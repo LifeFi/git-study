@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# environments & secrets
+.env*
+secrets.toml
+
+
+# git-study runtime
+.repo_cache/
+.git-study/
+
+
+# temp resource
+
+# Agents
+.claude*
+CLAUDE.md
+AGENTS.md
+
+
+
