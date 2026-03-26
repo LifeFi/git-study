@@ -1165,6 +1165,10 @@ class GitStudyApp(App):
         api_key, _ = get_openai_api_key(self.api_key_mode)
         if api_key:
             return True
+        self.prompt_api_key_settings(action_label=action_label)
+        return False
+
+    def prompt_api_key_settings(self, *, action_label: str) -> None:
         self._set_status("OpenAI API Key 설정이 필요합니다.")
         self._set_result(
             f"{action_label}을(를) 실행하려면 OpenAI API Key를 먼저 설정해 주세요."
@@ -1178,7 +1182,6 @@ class GitStudyApp(App):
             ),
             self._handle_api_key_screen_closed,
         )
-        return False
 
     def _save_app_state(self) -> None:
         save_app_state(
@@ -2055,7 +2058,14 @@ class GitStudyApp(App):
             inline_quiz.hide_panel()
             self._after_inline_quiz_closed()
             return
-        if not self._ensure_api_key(action_label="인라인 퀴즈 생성"):
+        api_key, _ = get_openai_api_key(self.api_key_mode)
+        if not api_key:
+            inline_quiz.show_placeholder(
+                "OpenAI API Key를 설정하면 인라인 퀴즈를 생성할 수 있습니다."
+            )
+            self._update_workspace_widths()
+            self._update_top_toggle_buttons()
+            self.prompt_api_key_settings(action_label="인라인 퀴즈 생성")
             return
         self._show_inline_quiz()
 

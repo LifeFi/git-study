@@ -575,9 +575,15 @@ class InlineQuizDock(Vertical):
         self._state = "answering"
         if self._animate_timer is not None:
             self._animate_timer.pause()
-        self._set_status(f"질문 생성 실패: {error[:100]}")
+        friendly_error = error
+        if "OPENAI_API_KEY" in error or "API key" in error:
+            friendly_error = (
+                "인라인 퀴즈 질문 생성에는 OpenAI API Key가 필요합니다. "
+                "API Key 버튼에서 설정해 주세요."
+            )
+        self._set_status(f"질문 생성 실패: {friendly_error[:100]}")
         self.query_one("#iq-question-text", Static).update(
-            f"질문 생성에 실패했습니다.\n\n{error[:300]}"
+            f"질문 생성에 실패했습니다.\n\n{friendly_error[:300]}"
         )
 
     def _build_q_nav(self) -> None:
@@ -794,7 +800,13 @@ class InlineQuizDock(Vertical):
         if self._animate_timer is not None:
             self._animate_timer.pause()
         self.query_one("#iq-grade-btn", Button).disabled = False
-        self._set_status(f"채점 실패: {error[:100]}")
+        friendly_error = error
+        if "OPENAI_API_KEY" in error or "API key" in error:
+            friendly_error = (
+                "인라인 퀴즈 채점에는 OpenAI API Key가 필요합니다. "
+                "API Key 버튼에서 설정해 주세요."
+            )
+        self._set_status(f"채점 실패: {friendly_error[:100]}")
 
     def _show_results(self) -> None:
         grade_map = {grade["id"]: grade for grade in self.grades}
