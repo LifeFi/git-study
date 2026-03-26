@@ -212,6 +212,23 @@ class GitStudyApp(App):
 
     #top-toggle-group > Button {
         margin-left: 1;
+        width: auto;
+        min-width: 4;
+        height: 1;
+        min-height: 1;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: cyan;
+        text-style: bold;
+    }
+
+    #top-toggle-group > Button:hover,
+    #top-toggle-group > Button:focus {
+        background: transparent;
+        border: none;
+        color: cyan;
+        text-style: bold underline;
     }
 
     #repo-source {
@@ -368,6 +385,7 @@ class GitStudyApp(App):
         width: 1fr;
     }
 
+    #top-code-open,
     #commit-detail-open-code,
     #inline-quiz-open {
         width: auto;
@@ -381,6 +399,8 @@ class GitStudyApp(App):
         text-style: bold;
     }
 
+    #top-code-open:hover,
+    #top-code-open:focus,
     #commit-detail-open-code:hover,
     #commit-detail-open-code:focus,
     #inline-quiz-open:hover,
@@ -672,8 +692,8 @@ class GitStudyApp(App):
             )
             yield Static("", id="top-bar-spacer")
             with Horizontal(id="top-toggle-group"):
-                yield Button("Quiz", id="inline-quiz-open")
-                yield Button("Code", id="commit-detail-open-code")
+                yield Button("Quiz", id="top-quiz-open")
+                yield Button("Code", id="top-code-open")
         with Horizontal(id="workspace"):
             with Vertical(id="left-column"):
                 with Vertical(id="repo-bar"):
@@ -728,6 +748,8 @@ class GitStudyApp(App):
                             with Horizontal(id="commit-detail-header"):
                                 yield Label("Commit Detail", classes="section-title")
                                 yield Static("", id="commit-detail-header-spacer")
+                                yield Button("Inline", id="inline-quiz-open")
+                                yield Button("Code", id="commit-detail-open-code")
                             yield TextArea(
                                 "",
                                 id="commit-detail-view",
@@ -1581,8 +1603,8 @@ class GitStudyApp(App):
 
     def _focus_chain(self) -> list[Widget]:
         return [
-            self.query_one("#inline-quiz-open", Button),
-            self.query_one("#commit-detail-open-code", Button),
+            self.query_one("#top-quiz-open", Button),
+            self.query_one("#top-code-open", Button),
             self.query_one("#repo-source", RadioSet),
             self.query_one("#repo-location", Input),
             self.query_one("#repo-open", Button),
@@ -1716,6 +1738,14 @@ class GitStudyApp(App):
             return
         if event.key == "space":
             focused = self.focused
+            if focused is self.query_one("#top-quiz-open", Button):
+                event.stop()
+                self.action_open_inline_quiz()
+                return
+            if focused is self.query_one("#top-code-open", Button):
+                event.stop()
+                self.action_open_code_browser()
+                return
             if focused is self.query_one("#repo-open", Button):
                 event.stop()
                 self._load_selected_repo("저장소를 불러왔습니다.")
@@ -1748,11 +1778,6 @@ class GitStudyApp(App):
                 event.stop()
                 self._toggle_result_metadata()
                 return
-            if focused is self.query_one("#inline-quiz-open", Button):
-                event.stop()
-                self.action_open_inline_quiz()
-                return
-
     @on(ListView.Highlighted, "#commit-list")
     def handle_commit_highlight(self, event: ListView.Highlighted) -> None:
         if event.list_view.index is None:
@@ -1795,6 +1820,14 @@ class GitStudyApp(App):
     @on(Button.Pressed, "#result-meta-toggle")
     def handle_result_meta_toggle(self) -> None:
         self._toggle_result_metadata()
+
+    @on(Button.Pressed, "#top-quiz-open")
+    def handle_top_quiz_open(self) -> None:
+        self.action_open_inline_quiz()
+
+    @on(Button.Pressed, "#top-code-open")
+    def handle_top_code_open(self) -> None:
+        self.action_open_code_browser()
 
     @on(Button.Pressed, "#repo-open")
     def handle_repo_open(self) -> None:
@@ -2026,6 +2059,14 @@ class GitStudyApp(App):
             return
         self._show_inline_quiz()
 
+    def action_open_quiz_section(self) -> None:
+        inline_quiz = self.query_one("#inline-quiz-dock", InlineQuizDock)
+        if inline_quiz.display:
+            inline_quiz.hide_panel()
+            self._after_inline_quiz_closed()
+        self.query_one("#request-input", TextArea).focus()
+        self._set_status("퀴즈 생성 섹션으로 이동했습니다.")
+
     def _show_inline_quiz(self) -> None:
         inline_quiz = self.query_one("#inline-quiz-dock", InlineQuizDock)
         if not self.commits:
@@ -2108,8 +2149,8 @@ class GitStudyApp(App):
 
     def _update_top_toggle_buttons(self) -> None:
         try:
-            quiz_btn = self.query_one("#inline-quiz-open", Button)
-            code_btn = self.query_one("#commit-detail-open-code", Button)
+            quiz_btn = self.query_one("#top-quiz-open", Button)
+            code_btn = self.query_one("#top-code-open", Button)
         except Exception:
             return
         code_browser = self.query_one("#code-browser-dock", CodeBrowserDock)
