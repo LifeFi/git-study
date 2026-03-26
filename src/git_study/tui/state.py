@@ -1,18 +1,69 @@
 import json
 from pathlib import Path
 
+from ..runtime_paths import get_global_runtime_dir
+
 
 DEFAULT_REQUEST = "최근 커밋 기반으로 퀴즈 만들어줘"
-APP_RUNTIME_DIR = Path(__file__).resolve().parents[3] / ".git-study"
-APP_STATE_PATH = APP_RUNTIME_DIR / "state.json"
-QUIZ_OUTPUT_DIR = APP_RUNTIME_DIR / "outputs"
 
 
-def load_app_state() -> dict[str, str]:
-    if not APP_STATE_PATH.exists():
+def find_local_repo_root(start: Path | None = None) -> Path | None:
+    current = (start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+def get_runtime_dir(
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    if repo_source == "local":
+        if local_repo_root is not None:
+            repo_root = Path(local_repo_root).expanduser().resolve()
+        else:
+            repo_root = find_local_repo_root()
+        if repo_root is not None and (repo_root / ".git").exists():
+            return repo_root / ".git-study"
+    return get_global_runtime_dir()
+
+
+def get_app_state_path(
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    return get_runtime_dir(
+        repo_source=repo_source,
+        local_repo_root=local_repo_root,
+    ) / "state.json"
+
+
+def get_quiz_output_dir(
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    return get_runtime_dir(
+        repo_source=repo_source,
+        local_repo_root=local_repo_root,
+    ) / "outputs"
+
+
+def load_app_state(
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> dict[str, str]:
+    app_state_path = get_app_state_path(
+        repo_source=repo_source,
+        local_repo_root=local_repo_root,
+    )
+    if not app_state_path.exists():
         return {}
     try:
-        payload = json.loads(APP_STATE_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(app_state_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
@@ -59,8 +110,13 @@ def save_app_state(
     difficulty: str,
     quiz_style: str,
     request_text: str,
+    local_repo_root: Path | str | None = None,
 ) -> None:
-    APP_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    runtime_dir = get_runtime_dir(
+        repo_source=repo_source,
+        local_repo_root=local_repo_root,
+    )
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "repo_source": repo_source,
         "github_repo_url": github_repo_url,
@@ -69,17 +125,25 @@ def save_app_state(
         "quiz_style": quiz_style,
         "request_text": request_text,
     }
-    APP_STATE_PATH.write_text(
+    (runtime_dir / "state.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def list_saved_result_files() -> list[Path]:
-    if not QUIZ_OUTPUT_DIR.exists():
+def list_saved_result_files(
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> list[Path]:
+    quiz_output_dir = get_quiz_output_dir(
+        repo_source=repo_source,
+        local_repo_root=local_repo_root,
+    )
+    if not quiz_output_dir.exists():
         return []
     return sorted(
-        QUIZ_OUTPUT_DIR.glob("quiz-output-*.*"),
+        quiz_output_dir.glob("quiz-output-*.*"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

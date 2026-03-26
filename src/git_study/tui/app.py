@@ -22,15 +22,31 @@ from textual.widgets import (
     Static,
     TextArea,
 )
+from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
+from .. import __version__
 from ..graph import (
     DEFAULT_COMMIT_LIST_LIMIT,
+    REMOTE_CACHE_RETENTION_DAYS,
     build_commit_context,
+    cleanup_expired_remote_repo_caches,
     get_commit_list_snapshot,
     get_latest_commit_head,
     get_repo,
+    get_remote_repo_cache_dir,
     graph,
+    list_remote_repo_caches,
+    remove_remote_repo_cache,
 )
+from ..secrets import (
+    clear_session_openai_api_key,
+    delete_openai_api_key,
+    get_openai_api_key,
+    get_secrets_path,
+    save_openai_api_key,
+    set_session_openai_api_key,
+)
+from ..settings import DEFAULT_MODEL, get_settings_path, load_settings, save_settings
 from .commit_selection import (
     CommitSelection,
     selected_commit_indices,
@@ -53,12 +69,18 @@ from .result_metadata import (
 )
 from .state import (
     DEFAULT_REQUEST,
-    QUIZ_OUTPUT_DIR,
+    find_local_repo_root,
+    get_quiz_output_dir,
     list_saved_result_files,
     load_app_state,
     save_app_state,
 )
-from .widgets import LabeledMarkdownViewer, ResultLoadScreen
+from .widgets import (
+    ApiKeyScreen,
+    LabeledMarkdownViewer,
+    RemoteRepoCacheScreen,
+    ResultLoadScreen,
+)
 from .inline_quiz import InlineQuizDock, InlineQuizSavedState
 
 
@@ -108,7 +130,7 @@ class RepoCommitsFailed(Message):
 
 class GitStudyApp(App):
     TITLE = "Git Study"
-    SUB_TITLE = "Learn programming through Git history"
+    SUB_TITLE = f"Learn programming through Git history · v{__version__}"
 
     CSS = """
     Screen {
@@ -133,10 +155,18 @@ class GitStudyApp(App):
         content-align: left middle;
     }
 
-    #top-bar-subtitle {
+    #top-bar-version {
         color: $text-muted;
         width: auto;
         margin-left: 1;
+        content-align: left middle;
+    }
+
+    #top-bar-subtitle {
+        color: $text-muted;
+        width: auto;
+        margin-left: 3;
+        margin-right: 1;
         content-align: left middle;
     }
 
@@ -205,29 +235,30 @@ class GitStudyApp(App):
         padding: 0 1 0 1;
     }
 
-    #repo-open {
+    #repo-open,
+    #repo-cache-open {
         width: auto;
-        min-width: 6;
+        min-width: 4;
         margin-right: 1;
-        height: 3;
-        min-height: 3;
+        height: 1;
+        min-height: 1;
         padding: 0;
         background: transparent;
         border: none;
-        border-bottom: solid transparent;
         color: cyan;
         text-style: bold;
-        content-align: center bottom;
+        content-align: center middle;
     }
 
     #repo-open:hover,
-    #repo-open:focus {
+    #repo-open:focus,
+    #repo-cache-open:hover,
+    #repo-cache-open:focus {
         background: transparent;
         border: none;
-        border-bottom: solid cyan;
         outline: none;
         color: cyan;
-        text-style: bold;
+        text-style: bold underline;
     }
 
     #workspace {
@@ -317,7 +348,8 @@ class GitStudyApp(App):
 
     #commit-detail-panel,
     #control-panel,
-    #result-panel {
+    #result-panel,
+    #settings-panel {
         border: round $accent;
         padding: 0 1;
     }
@@ -361,6 +393,25 @@ class GitStudyApp(App):
 
     #control-panel {
         height: 8;
+    }
+
+    #settings-panel {
+        height: auto;
+        min-height: 3;
+        margin-top: 0;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
+
+    #settings-row {
+        height: auto;
+        align: left middle;
+    }
+
+    #api-key-status {
+        width: 1fr;
+        color: $text-muted;
+        margin-left: 1;
     }
 
     #result-panel {
@@ -537,8 +588,13 @@ class GitStudyApp(App):
 
     def __init__(self) -> None:
         super().__init__()
+        cleanup_expired_remote_repo_caches()
         self.commit_list_limit = DEFAULT_COMMIT_LIST_LIMIT
-        app_state = load_app_state()
+        self.local_repo_root = find_local_repo_root()
+        self.settings = load_settings()
+        self.model_name = self.settings.get("model", DEFAULT_MODEL)
+        self.api_key_mode = self.settings.get("openai_api_key_mode", "session")
+        app_state = load_app_state(local_repo_root=self.local_repo_root)
         self.repo_source = app_state.get("repo_source", "local")
         self.github_repo_url = app_state.get("github_repo_url", "")
         self.saved_commit_mode = app_state.get("commit_mode", "auto")
@@ -556,13 +612,29 @@ class GitStudyApp(App):
                 repo_source=initial_repo_source,
                 github_repo_url=initial_github_repo_url,
             )
+        except (InvalidGitRepositoryError, NoSuchPathError):
+            initial_snapshot = {
+                "commits": [],
+                "has_more_commits": False,
+                "total_commit_count": 0,
+            }
+            if initial_repo_source == "local":
+                self.repo_source = "local"
         except Exception:
-            initial_snapshot = get_commit_list_snapshot(
-                limit=self.commit_list_limit,
-                repo_source="local",
-                github_repo_url=None,
-            )
-            self.repo_source = "local"
+            try:
+                initial_snapshot = get_commit_list_snapshot(
+                    limit=self.commit_list_limit,
+                    repo_source="local",
+                    github_repo_url=None,
+                )
+                self.repo_source = "local"
+            except (InvalidGitRepositoryError, NoSuchPathError):
+                initial_snapshot = {
+                    "commits": [],
+                    "has_more_commits": False,
+                    "total_commit_count": 0,
+                }
+                self.repo_source = "local"
         self.commits = initial_snapshot["commits"]
         self.has_more_commits = initial_snapshot["has_more_commits"]
         self.total_commit_count = initial_snapshot["total_commit_count"]
@@ -593,6 +665,7 @@ class GitStudyApp(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
             yield Label("Git Study", id="top-bar-title")
+            yield Label(f"v{__version__}", id="top-bar-version")
             yield Label(
                 "AI writes code. Can you explain it?",
                 id="top-bar-subtitle",
@@ -619,6 +692,11 @@ class GitStudyApp(App):
                                 id="repo-github",
                                 value=self.repo_source == "github",
                             )
+                        yield Button(
+                            "Caches",
+                            id="repo-cache-open",
+                            classes="result-tool result-action",
+                        )
                     with Horizontal(id="repo-bar-bottom"):
                         yield Input(
                             placeholder="https://github.com/nomadcoders/ai-agents-masterclass",
@@ -626,7 +704,7 @@ class GitStudyApp(App):
                             value=self.github_repo_url,
                         )
                         yield Button(
-                            "Quiz", id="repo-open", classes="result-tool result-action"
+                            "Open", id="repo-open", classes="result-tool result-action"
                         )
                 with Horizontal(id="left-body"):
                     with Vertical(id="commit-panel"):
@@ -783,6 +861,18 @@ class GitStudyApp(App):
                             )
                 yield InlineQuizDock(id="inline-quiz-dock")
             yield CodeBrowserDock(id="code-browser-dock")
+        with Vertical(id="settings-panel"):
+            with Horizontal(id="settings-row"):
+                yield Label("Settings", classes="section-title")
+                yield Button(
+                    "API Key",
+                    id="api-key-open",
+                    classes="result-tool result-action",
+                )
+                yield Static(
+                    self._api_key_status_text(),
+                    id="api-key-status",
+                )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1031,6 +1121,43 @@ class GitStudyApp(App):
             self._current_github_repo_url(),
         )
 
+    def _api_key_status_text(self) -> str:
+        api_key, source = get_openai_api_key(self.api_key_mode)
+        if api_key:
+            if source == "env":
+                return "환경변수 OPENAI_API_KEY 사용 중"
+            if source == "file":
+                return "전역 secrets.json 에 저장됨"
+            if source == "session":
+                return "이번 실행 동안만 저장됨"
+        if self.api_key_mode == "file":
+            return "전역 파일 저장 모드, 아직 키 없음"
+        return "세션 전용 모드, 아직 키 없음"
+
+    def _refresh_api_key_status(self) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one("#api-key-status", Static).update(self._api_key_status_text())
+
+    def _ensure_api_key(self, *, action_label: str) -> bool:
+        api_key, _ = get_openai_api_key(self.api_key_mode)
+        if api_key:
+            return True
+        self._set_status("OpenAI API Key 설정이 필요합니다.")
+        self._set_result(
+            f"{action_label}을(를) 실행하려면 OpenAI API Key를 먼저 설정해 주세요."
+        )
+        self.push_screen(
+            ApiKeyScreen(
+                current_mode=self.api_key_mode,
+                current_status=self._api_key_status_text(),
+                settings_path=get_settings_path(),
+                secrets_path=get_secrets_path(),
+            ),
+            self._handle_api_key_screen_closed,
+        )
+        return False
+
     def _save_app_state(self) -> None:
         save_app_state(
             repo_source=self._current_repo_source(),
@@ -1043,7 +1170,22 @@ class GitStudyApp(App):
                 if self.is_mounted
                 else self.saved_request
             ),
+            local_repo_root=self.local_repo_root,
         )
+
+    def _current_local_repo_root(self) -> Path | None:
+        if self._current_repo_source() != "local":
+            return None
+        try:
+            local_repo = get_repo(repo_source="local", refresh_remote=False)
+        except Exception:
+            return self.local_repo_root
+        working_tree_dir = local_repo.working_tree_dir
+        if not working_tree_dir:
+            return self.local_repo_root
+        repo_root = Path(working_tree_dir).resolve()
+        self.local_repo_root = repo_root
+        return repo_root
 
     def _reset_repo_tracking(self) -> None:
         self.commit_list_limit = DEFAULT_COMMIT_LIST_LIMIT
@@ -1200,10 +1342,13 @@ class GitStudyApp(App):
 
     def _download_result(self) -> None:
         extension = "md" if self.result_view_mode == "markdown" else "txt"
-        QUIZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        quiz_output_dir = get_quiz_output_dir(
+            repo_source=self._current_repo_source(),
+            local_repo_root=self._current_local_repo_root(),
+        )
+        quiz_output_dir.mkdir(parents=True, exist_ok=True)
         filename = (
-            QUIZ_OUTPUT_DIR
-            / f"quiz-output-{time.strftime('%Y%m%d-%H%M%S')}.{extension}"
+            quiz_output_dir / f"quiz-output-{time.strftime('%Y%m%d-%H%M%S')}.{extension}"
         )
         file_content = result_content_for_save(self.result_content, extension)
         filename.write_text(file_content, encoding="utf-8")
@@ -1215,7 +1360,10 @@ class GitStudyApp(App):
         )
 
     def _saved_result_files(self) -> list[Path]:
-        return list_saved_result_files()
+        return list_saved_result_files(
+            repo_source=self._current_repo_source(),
+            local_repo_root=self._current_local_repo_root(),
+        )
 
     def _load_result_from_file(self, filename: Path) -> None:
         content = filename.read_text(encoding="utf-8")
@@ -1258,18 +1406,27 @@ class GitStudyApp(App):
         repo_location = self.query_one("#repo-location", Input)
         repo_open = self.query_one("#repo-open", Button)
         if repo_source == "local":
-            local_repo = get_repo(repo_source="local", refresh_remote=False)
-            local_repo_path = local_repo.working_tree_dir or str(Path.cwd())
+            local_repo_path = str(Path.cwd())
+            try:
+                local_repo = get_repo(repo_source="local", refresh_remote=False)
+                local_repo_path = local_repo.working_tree_dir or local_repo_path
+                self.local_repo_root = Path(local_repo_path).resolve()
+            except (InvalidGitRepositoryError, NoSuchPathError):
+                self.local_repo_root = None
             repo_location.value = local_repo_path
             repo_location.tooltip = local_repo_path
-            repo_open.label = "Quiz"
+            repo_open.label = "Open"
         else:
-            local_repo = get_repo(repo_source="local", refresh_remote=False)
-            local_repo_path = local_repo.working_tree_dir or str(Path.cwd())
+            local_repo_path = str(Path.cwd())
+            try:
+                local_repo = get_repo(repo_source="local", refresh_remote=False)
+                local_repo_path = local_repo.working_tree_dir or local_repo_path
+            except (InvalidGitRepositoryError, NoSuchPathError):
+                pass
             if repo_location.value == local_repo_path:
                 repo_location.value = self.github_repo_url
             repo_location.tooltip = None
-            repo_open.label = "Quiz"
+            repo_open.label = "Open"
         self._save_app_state()
 
     def _start_status_animation(self) -> None:
@@ -1429,6 +1586,7 @@ class GitStudyApp(App):
             self.query_one("#repo-source", RadioSet),
             self.query_one("#repo-location", Input),
             self.query_one("#repo-open", Button),
+            self.query_one("#repo-cache-open", Button),
             self.query_one("#commit-list", ListView),
             self.query_one("#commit-detail-view", TextArea),
             self.query_one("#commit-mode", RadioSet),
@@ -1642,6 +1800,87 @@ class GitStudyApp(App):
     def handle_repo_open(self) -> None:
         self._load_selected_repo("저장소를 불러왔습니다.")
 
+    @on(Button.Pressed, "#repo-cache-open")
+    def handle_repo_cache_open(self) -> None:
+        cleanup_expired_remote_repo_caches()
+        self.push_screen(
+            RemoteRepoCacheScreen(
+                list_remote_repo_caches(),
+                get_remote_repo_cache_dir(),
+                REMOTE_CACHE_RETENTION_DAYS,
+            ),
+            self._handle_repo_cache_screen_closed,
+        )
+
+    def _handle_repo_cache_screen_closed(self, selected_slug: str | None) -> None:
+        if not selected_slug:
+            return
+        if remove_remote_repo_cache(selected_slug):
+            self._set_status("선택한 원격 저장소 캐시를 제거했습니다.")
+        else:
+            self._set_status("제거할 원격 저장소 캐시를 찾지 못했습니다.")
+
+    @on(Button.Pressed, "#api-key-open")
+    def handle_api_key_open(self) -> None:
+        self.push_screen(
+            ApiKeyScreen(
+                current_mode=self.api_key_mode,
+                current_status=self._api_key_status_text(),
+                settings_path=get_settings_path(),
+                secrets_path=get_secrets_path(),
+            ),
+            self._handle_api_key_screen_closed,
+        )
+
+    def _handle_api_key_screen_closed(
+        self, result: dict[str, str] | None
+    ) -> None:
+        if not result:
+            return
+        action = result.get("action")
+        mode = result.get("mode", "session")
+        self.api_key_mode = mode if mode in {"session", "file"} else "session"
+
+        if action == "clear":
+            clear_session_openai_api_key()
+            delete_openai_api_key()
+            save_settings(
+                model=self.model_name,
+                openai_api_key_mode=self.api_key_mode,
+                openai_api_key_configured=False,
+            )
+            self.settings = load_settings()
+            self._refresh_api_key_status()
+            self._set_status("저장된 API Key를 제거했습니다.")
+            return
+
+        if action != "save":
+            return
+
+        api_key = result.get("api_key", "").strip()
+        if not api_key:
+            self._set_status("API Key를 입력해 주세요.")
+            return
+
+        if self.api_key_mode == "file":
+            save_openai_api_key(api_key)
+            clear_session_openai_api_key()
+        else:
+            set_session_openai_api_key(api_key)
+            delete_openai_api_key()
+
+        save_settings(
+            model=self.model_name,
+            openai_api_key_mode=self.api_key_mode,
+            openai_api_key_configured=True,
+        )
+        self.settings = load_settings()
+        self._refresh_api_key_status()
+        if self.api_key_mode == "file":
+            self._set_status("API Key를 전역 파일에 저장했습니다.")
+        else:
+            self._set_status("API Key를 이번 실행 동안만 저장했습니다.")
+
     @on(Button.Pressed, "#commit-detail-open-code")
     def handle_open_code_browser(self) -> None:
         self.action_open_code_browser()
@@ -1782,6 +2021,8 @@ class GitStudyApp(App):
         if inline_quiz.display:
             inline_quiz.hide_panel()
             self._after_inline_quiz_closed()
+            return
+        if not self._ensure_api_key(action_label="인라인 퀴즈 생성"):
             return
         self._show_inline_quiz()
 
@@ -1934,6 +2175,8 @@ class GitStudyApp(App):
         if not self.commits:
             self._set_result("표시할 커밋이 없습니다.")
             return
+        if not self._ensure_api_key(action_label="퀴즈 생성"):
+            return
 
         payload = {
             "messages": [{"role": "user", "content": self._current_request()}],
@@ -1971,9 +2214,9 @@ class GitStudyApp(App):
             )
         except Exception as exc:
             error_message = str(exc)
-            if "OPENAI_API_KEY" in error_message:
+            if "OPENAI_API_KEY" in error_message or "API key" in error_message:
                 error_message = (
-                    "텍스트 diff 기반 퀴즈 생성에는 OPENAI_API_KEY가 필요합니다."
+                    "텍스트 diff 기반 퀴즈 생성에는 OpenAI API Key가 필요합니다. API Key 버튼에서 설정해 주세요."
                 )
             self.post_message(QuizFailed(error_message))
             return

@@ -1,6 +1,8 @@
 import time
 from pathlib import Path
 
+from git.exc import InvalidGitRepositoryError, NoSuchPathError
+
 from ..graph import get_repo
 
 
@@ -25,7 +27,10 @@ def selected_range_summary(
 def current_repository_label(repo_source: str, github_repo_url: str) -> str:
     if repo_source == "github":
         return github_repo_url or "unknown"
-    local_repo = get_repo(repo_source="local", refresh_remote=False)
+    try:
+        local_repo = get_repo(repo_source="local", refresh_remote=False)
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        return str(Path.cwd())
     return local_repo.working_tree_dir or str(Path.cwd())
 
 

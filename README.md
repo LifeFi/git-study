@@ -20,7 +20,7 @@ Git 저장소 (local / GitHub)
   -> LangGraph: collect_commit_context -> build_quiz
   -> TUI app.py: 커밋 목록/상세/옵션/결과 렌더링
   -> inline_quiz.py: 코드 앵커 질문 생성 및 채점
-  -> .git-study/outputs/: 결과 저장
+  -> repo 또는 사용자 상태 디렉터리: 결과 저장
 ```
 
 ### 주요 모듈
@@ -34,7 +34,7 @@ Git 저장소 (local / GitHub)
 - `src/git_study/tui/code_browser.py`
   선택한 커밋 범위의 파일 목록과 코드 diff를 터미널 UI로 보여줍니다.
 - `src/git_study/tui/state.py`
-  앱 상태를 `.git-study/state.json`에 저장하고, 저장된 퀴즈 결과를 관리합니다.
+  앱 상태 저장 경로를 결정하고, 저장된 퀴즈 결과를 관리합니다.
 
 ## 요구 사항
 
@@ -42,7 +42,7 @@ Git 저장소 (local / GitHub)
 - `uv`
 - OpenAI API 키
 
-`.env` 파일이 있으면 자동으로 로드되며, 최소한 아래 값이 필요합니다.
+`.env` 파일이 있으면 자동으로 로드되며, TUI의 `API Key` 버튼으로 전역 설정을 저장해 사용할 수도 있습니다.
 
 ```bash
 OPENAI_API_KEY=...
@@ -82,7 +82,16 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m git_study.tui
 
 - `Local .git`: 현재 작업 디렉터리 기준으로 Git 루트를 탐색합니다.
 - `GitHub Repo`: `https://github.com/owner/repo` 형식의 URL을 입력하면 원격 저장소를 캐시해 사용합니다.
-- 원격 저장소 캐시는 `.repo_cache/github/` 아래에 저장됩니다.
+- 원격 저장소 캐시는 프로젝트 내부가 아니라 사용자 캐시 디렉터리 아래에 저장됩니다.
+- 원격 저장소 캐시는 마지막 사용 시각 기준 `30일` 동안 유지되며, 앱 시작 또는 원격 저장소 접근 시 오래된 캐시를 자동 정리합니다.
+- `GitHub Repo` 옵션 옆의 `Caches` 버튼으로 현재 저장된 원격 저장소 캐시 목록과 마지막 사용 시각, 실제 경로를 확인할 수 있습니다.
+- 캐시 목록 화면에서 `Remove Selected` 버튼 또는 `d` 키로 선택한 캐시를 수동 제거할 수 있습니다.
+
+OS별 기본 위치:
+
+- macOS: `~/Library/Caches/git-study/github/`
+- Linux: `$XDG_CACHE_HOME/git-study/github/` 또는 기본값 `~/.cache/git-study/github/`
+- Windows: `%LOCALAPPDATA%/git-study/Cache/github/` 또는 기본값 `~/AppData/Local/git-study/Cache/github/`
 
 ### 커밋 탐색
 
@@ -107,6 +116,10 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m git_study.tui
 - 스타일:
   `Mixed`, `Study Session`, `Multiple Choice`, `Short Answer`, `Conceptual`
 - 추가 요청 입력창에서 "테스트 관점으로 내줘", "설계 의도를 많이 물어봐" 같은 지시를 덧붙일 수 있습니다.
+- `API Key` 버튼으로 OpenAI API 키를 설정할 수 있습니다.
+- `Session Only`는 현재 실행 동안만 메모리에 보관합니다.
+- `Global File`은 `~/.git-study/secrets.json`에 저장합니다.
+- 저장 방식과 모델 설정은 `~/.git-study/settings.json`에 저장합니다.
 
 ### 결과 패널
 
@@ -118,8 +131,12 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m git_study.tui
 
 저장 위치:
 
-- 앱 상태: `.git-study/state.json`
-- 퀴즈 결과: `.git-study/outputs/quiz-output-*`
+- 로컬 Git 저장소 실행: `<repo-root>/.git-study/`
+- GitHub 원격 저장소 또는 일반 실행: `~/.git-study/`
+- 앱 상태: `<storage-root>/state.json`
+- 전역 설정: `~/.git-study/settings.json`
+- 전역 비밀값: `~/.git-study/secrets.json`
+- 퀴즈 결과: `<storage-root>/outputs/quiz-output-*`
 
 ### Commit Detail 패널
 
