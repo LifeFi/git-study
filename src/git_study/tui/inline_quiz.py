@@ -9,14 +9,17 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Button, Label, Static, TextArea
 
-from ..graph import (
-    InlineQuizGrade,
-    InlineQuizQuestion,
-    build_inline_quiz_questions,
+from ..domain.inline_anchor import (
+    extract_file_paths_from_summary,
+    parse_file_context_blocks,
+)
+from ..domain.code_context import (
     detect_code_language,
     get_file_content_at_commit_or_empty,
-    grade_inline_answers,
 )
+from ..services.inline_grade_service import generate_inline_quiz_grades
+from ..services.inline_quiz_service import generate_inline_quiz_questions
+from ..types import InlineQuizGrade, InlineQuizQuestion
 from .code_browser import highlight_code_lines
 
 
@@ -507,23 +510,11 @@ class InlineQuizDock(Vertical):
         self.query_one("#iq-status-bar", Static).update(text)
 
     def _preload_known_files(self) -> None:
-        import re as _re
-
-        from ..graph import _extract_file_paths_from_summary
-
         file_context_text = self.commit_context.get("file_context_text", "")
-
-        for match in _re.finditer(
-            r"FILE:\s+(.+?)\n```[^\n]*\n([\s\S]*?)```",
-            file_context_text,
-        ):
-            path = match.group(1).strip()
-            snippet = match.group(2)
-            if path and snippet.strip():
-                self._known_files[path] = snippet
+        self._known_files.update(parse_file_context_blocks(file_context_text))
 
         all_paths: set[str] = set(self._known_files.keys())
-        for path in _extract_file_paths_from_summary(
+        for path in extract_file_paths_from_summary(
             self.commit_context.get("changed_files_summary", "")
         ):
             all_paths.add(path)
@@ -553,7 +544,7 @@ class InlineQuizDock(Vertical):
     def _generate_questions(self) -> None:
         try:
             self._preload_known_files()
-            questions = build_inline_quiz_questions(self.commit_context)
+            questions = generate_inline_quiz_questions(self.commit_context)
             self.app.call_from_thread(self._on_questions_loaded, questions)
         except Exception as exc:
             self.app.call_from_thread(self._on_questions_failed, str(exc))
@@ -783,7 +774,7 @@ class InlineQuizDock(Vertical):
     @work(thread=True)
     def _do_grade(self) -> None:
         try:
-            grades = grade_inline_answers(self.questions, self.answers)
+            grades = generate_inline_quiz_grades(self.questions, self.answers)
             self.app.call_from_thread(self._on_grades_loaded, grades)
         except Exception as exc:
             self.app.call_from_thread(self._on_grades_failed, str(exc))

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-from ..graph import get_repo
+from ..domain.repo_context import get_repo
 
 
 def selected_range_summary(

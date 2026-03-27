@@ -25,18 +25,19 @@ from textual.widgets import (
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
 from .. import __version__
-from ..graph import (
-    DEFAULT_COMMIT_LIST_LIMIT,
+from ..domain.repo_cache import (
     REMOTE_CACHE_RETENTION_DAYS,
-    build_commit_context,
     cleanup_expired_remote_repo_caches,
+    get_remote_repo_cache_dir,
+    list_remote_repo_caches,
+    remove_remote_repo_cache,
+)
+from ..domain.repo_context import (
+    DEFAULT_COMMIT_LIST_LIMIT,
+    build_commit_context,
     get_commit_list_snapshot,
     get_latest_commit_head,
     get_repo,
-    get_remote_repo_cache_dir,
-    graph,
-    list_remote_repo_caches,
-    remove_remote_repo_cache,
 )
 from ..secrets import (
     clear_session_openai_api_key,
@@ -46,7 +47,9 @@ from ..secrets import (
     save_openai_api_key,
     set_session_openai_api_key,
 )
+from ..services.quiz_service import run_quiz
 from ..settings import DEFAULT_MODEL, get_settings_path, load_settings, save_settings
+from ..types import InlineQuizGrade, InlineQuizQuestion
 from .commit_selection import (
     CommitSelection,
     selected_commit_indices,
@@ -2259,10 +2262,7 @@ class GitStudyApp(App):
     @work(thread=True)
     def generate_quiz(self, payload: dict) -> None:
         try:
-            result = graph.invoke(
-                payload,
-                config={"configurable": {"thread_id": "textual-tui-session"}},
-            )
+            result = run_quiz(payload)
         except Exception as exc:
             error_message = str(exc)
             if "OPENAI_API_KEY" in error_message or "API key" in error_message:

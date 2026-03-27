@@ -1,0 +1,90 @@
+<svg width="1064" height="700" viewBox="0 0 1064 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="60" y1="20" x2="992" y2="676" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3A424C"/>
+      <stop offset="1" stop-color="#2B313A"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="34" y1="58" x2="1020" y2="642" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#37404A"/>
+      <stop offset="1" stop-color="#2D343D"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1064" height="700" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="6"/>
+      <feGaussianBlur stdDeviation="8"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.09 0 0 0 0 0.11 0 0 0 0 0.14 0 0 0 0.35 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="8" y="8" width="1048" height="676" rx="14" fill="url(#bg)" stroke="#66717E" stroke-width="1.2"/>
+    <rect x="8" y="8" width="1048" height="32" rx="14" fill="#404954"/>
+    <circle cx="26" cy="24" r="6" fill="#8C95A2"/>
+    <circle cx="46" cy="24" r="6" fill="#8C95A2"/>
+    <circle cx="66" cy="24" r="6" fill="#8C95A2"/>
+
+    <rect x="34" y="52" width="978" height="596" rx="10" fill="url(#panel)" stroke="#7B8795" stroke-width="1.1"/>
+    <line x1="520" y1="52" x2="520" y2="648" stroke="#6E8578" stroke-width="1"/>
+    <line x1="34" y1="568" x2="1012" y2="568" stroke="#6E8578" stroke-width="1"/>
+
+    <text x="78" y="90" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">1</text>
+    <text x="78" y="130" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">2</text>
+    <text x="78" y="170" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">3</text>
+    <text x="78" y="210" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">4</text>
+    <text x="78" y="250" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">5</text>
+    <text x="78" y="290" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">6</text>
+    <text x="78" y="330" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">7</text>
+    <text x="70" y="370" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">8</text>
+    <text x="70" y="410" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">9</text>
+    <text x="62" y="450" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">10+</text>
+    <text x="62" y="490" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">11+</text>
+    <text x="70" y="530" fill="#A6AFBE" font-size="18" font-family="JetBrains Mono, Menlo, monospace">12</text>
+
+    <text x="104" y="90" fill="#E5A5D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">import</text>
+    <text x="176" y="90" fill="#F2F2E8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">git.bins</text>
+    <text x="262" y="90" fill="#E5A5D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">as</text>
+    <text x="296" y="90" fill="#F6D7A8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">'cs'</text>
+
+    <text x="104" y="170" fill="#E5A5D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">def</text>
+    <text x="156" y="170" fill="#9BC6D4" font-size="18" font-family="JetBrains Mono, Menlo, monospace">__init__</text>
+    <text x="248" y="170" fill="#F2F2E8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">(data):</text>
+    <text x="144" y="210" fill="#E7A4D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">result</text>
+    <text x="220" y="210" fill="#F2F2E8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">hanel</text>
+    <text x="144" y="250" fill="#E7A4D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">return</text>
+    <text x="224" y="250" fill="#F2F2E8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">metlrs.r^duart()</text>
+
+    <rect x="104" y="344" width="412" height="30" fill="#79464D" opacity="0.88"/>
+    <rect x="104" y="374" width="412" height="76" fill="#446551" opacity="0.88"/>
+    <text x="118" y="366" fill="#F3CED2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">def calculate_metrics(data):</text>
+    <text x="150" y="404" fill="#C5DEC9" font-size="18" font-family="JetBrains Mono, Menlo, monospace"># Refactored for better performance</text>
+    <text x="150" y="438" fill="#F0F3EC" font-size="18" font-family="JetBrains Mono, Menlo, monospace">result = data.process()</text>
+    <text x="150" y="472" fill="#F0F3EC" font-size="18" font-family="JetBrains Mono, Menlo, monospace">return result</text>
+
+    <text x="104" y="500" fill="#E7A4D3" font-size="18" font-family="JetBrains Mono, Menlo, monospace">def</text>
+    <text x="148" y="500" fill="#8DB9D9" font-size="18" font-family="JetBrains Mono, Menlo, monospace">outer_epte_eotees</text>
+    <text x="328" y="500" fill="#F2F2E8" font-size="18" font-family="JetBrains Mono, Menlo, monospace">(data):</text>
+
+    <text x="104" y="580" fill="#B7E0C6" font-size="18" font-family="JetBrains Mono, Menlo, monospace">&gt; quiz_session.start()</text>
+
+    <rect x="546" y="122" width="456" height="360" rx="12" fill="#303843" stroke="#D2D8D0" stroke-width="1.6"/>
+    <rect x="546" y="122" width="456" height="54" rx="12" fill="#38404A"/>
+    <line x1="546" y1="176" x2="1002" y2="176" stroke="#D2D8D0" stroke-width="1.3"/>
+    <text x="774" y="159" text-anchor="middle" fill="#A7E4CD" font-size="20" font-family="JetBrains Mono, Menlo, monospace">Quiz: Refactoring Intent</text>
+
+    <text x="582" y="228" fill="#F5F6F2" font-size="20" font-family="JetBrains Mono, Menlo, monospace">What was the primary intent behind</text>
+    <text x="582" y="262" fill="#F5F6F2" font-size="20" font-family="JetBrains Mono, Menlo, monospace">the refactoring of the</text>
+    <text x="582" y="296" fill="#F5F6F2" font-size="20" font-family="JetBrains Mono, Menlo, monospace">`calculate_metrics` function?</text>
+
+    <text x="582" y="360" fill="#F5F6F2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">A) To fix a bug in data processing.</text>
+    <text x="562" y="410" fill="#F5F6F2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">&gt; B) To improve performance and</text>
+    <text x="606" y="448" fill="#F5F6F2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">readability.</text>
+    <text x="582" y="500" fill="#F5F6F2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">C) To add new functionality.</text>
+    <text x="582" y="548" fill="#F5F6F2" font-size="18" font-family="JetBrains Mono, Menlo, monospace">D) To comply with new style guide.</text>
+
+    <rect x="34" y="630" width="356" height="28" rx="0" fill="#ECE8DE"/>
+    <text x="46" y="649" fill="#23272D" font-size="17" font-family="JetBrains Mono, Menlo, monospace">TUI Active | Feedback Loop Ready</text>
+  </g>
+</svg>

@@ -11,14 +11,14 @@ from textual.widgets import Button, Footer, Header, Label, Static, Tree
 
 from textual.events import Click
 
-from ..graph import (
+from ..domain.code_context import (
     detect_code_language,
     get_commit_parent_sha,
     get_file_content_at_commit_or_empty,
     get_range_changed_file_paths,
-    get_repo,
     list_commit_tree_files,
 )
+from ..domain.repo_context import get_repo
 
 
 def compute_diff_annotations(
