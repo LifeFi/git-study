@@ -13,10 +13,12 @@ from ..types import InlineQuizGrade, InlineQuizQuestion
 class InlineGradeGraphState(TypedDict, total=False):
     questions: list[InlineQuizQuestion]
     answers: dict[str, str]
+    user_request: str
     question_blocks: str
     raw_grades: list[dict]
     review_result: dict
     final_grades: list[InlineQuizGrade]
+    grading_summary: dict
 
 
 def prepare_grading_payload(state: InlineGradeGraphState) -> InlineGradeGraphState:
@@ -36,7 +38,10 @@ def prepare_grading_payload(state: InlineGradeGraphState) -> InlineGradeGraphSta
 def grade_answers(state: InlineGradeGraphState) -> InlineGradeGraphState:
     grades = normalize_inline_grades(
         LLMClient().invoke_json(
-            build_inline_grade_prompt(question_blocks=state.get("question_blocks", ""))
+            build_inline_grade_prompt(
+                question_blocks=state.get("question_blocks", ""),
+                user_request=str(state.get("user_request", "")).strip(),
+            )
         )
     )
     return {"raw_grades": grades}
@@ -44,6 +49,15 @@ def grade_answers(state: InlineGradeGraphState) -> InlineGradeGraphState:
 
 def validate_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
     expected_ids = [question["id"] for question in state.get("questions", [])]
+    question_metadata = [
+        {
+            "id": question["id"],
+            "question_type": question["question_type"],
+            "question": question["question"],
+            "file_path": question["file_path"],
+        }
+        for question in state.get("questions", [])
+    ]
     review_result = normalize_inline_grade_review(
         LLMClient().invoke_json(
             build_inline_grade_review_prompt(
@@ -51,6 +65,7 @@ def validate_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
                     state.get("raw_grades", []), ensure_ascii=False, indent=2
                 ),
                 question_ids_json=json.dumps(expected_ids, ensure_ascii=False),
+                questions_json=json.dumps(question_metadata, ensure_ascii=False, indent=2),
             )
         )
     )
@@ -97,7 +112,10 @@ def finalize_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
                 feedback="채점 결과가 누락되어 기본값으로 처리했습니다.",
             )
         )
-    return {"final_grades": completed}
+    return {
+        "final_grades": completed,
+        "grading_summary": dict(review.get("grading_summary", {})),
+    }
 
 
 inline_grade_graph_builder = StateGraph(InlineGradeGraphState)

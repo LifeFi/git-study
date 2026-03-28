@@ -1,4 +1,6 @@
 from git_study.llm.schemas import (
+    normalize_general_grade_review,
+    normalize_general_questions,
     normalize_inline_anchor_candidates,
     normalize_inline_grade_review,
     normalize_inline_grades,
@@ -33,9 +35,9 @@ def test_normalize_quiz_analysis_fills_missing_question_plan_types() -> None:
     assert len(normalized["question_plan"]) == 4
     assert [item["type"] for item in normalized["question_plan"]] == [
         "intent",
-        "code_reading",
-        "behavior_change",
-        "risk_tradeoff",
+        "behavior",
+        "tradeoff",
+        "vulnerability",
     ]
 
 
@@ -106,6 +108,38 @@ def test_normalize_inline_grades_clamps_score_and_deduplicates() -> None:
     ]
 
 
+def test_normalize_general_questions_filters_type_and_stabilizes_ids() -> None:
+    payload = [
+        {
+            "id": "q1",
+            "question": "첫 질문",
+            "expected_answer": "답",
+            "question_type": "behavior",
+            "explanation": "해설",
+            "code_snippet": "run()",
+            "code_language": "python",
+            "code_reference": "src/a.py",
+            "choices": ["A", "B"],
+        },
+        {
+            "id": "q1",
+            "question": "둘째 질문",
+            "expected_answer": "답",
+            "question_type": "weird",
+            "choices": ["", "C"],
+        },
+    ]
+
+    normalized = normalize_general_questions(payload)
+
+    assert normalized[0]["id"] == "q1"
+    assert normalized[0]["question_type"] == "behavior"
+    assert normalized[0]["choices"] == ["A", "B"]
+    assert normalized[1]["id"] == "q2"
+    assert normalized[1]["question_type"] == "intent"
+    assert normalized[1]["choices"] == ["C"]
+
+
 def test_normalize_inline_grade_review_normalizes_nested_grades() -> None:
     payload = {
         "is_valid": True,
@@ -115,6 +149,12 @@ def test_normalize_inline_grade_review_normalizes_nested_grades() -> None:
             {"id": "q1", "score": 88, "feedback": "구체적입니다."},
             {"id": "q2", "score": -5, "feedback": "부족합니다."},
         ],
+        "grading_summary": {
+            "weak_points": ["의도 설명이 약함"],
+            "weak_files": ["src/a.py"],
+            "next_steps": ["의도 유형 다시 풀기"],
+            "overall_comment": "핵심은 파악했지만 설명이 짧습니다.",
+        },
     }
 
     normalized = normalize_inline_grade_review(payload)
@@ -124,3 +164,26 @@ def test_normalize_inline_grade_review_normalizes_nested_grades() -> None:
         {"id": "q1", "score": 88, "feedback": "구체적입니다."},
         {"id": "q2", "score": 0, "feedback": "부족합니다."},
     ]
+    assert normalized["grading_summary"]["weak_points"] == ["의도 설명이 약함"]
+
+
+def test_normalize_general_grade_review_normalizes_summary_fields() -> None:
+    payload = {
+        "is_valid": True,
+        "issues": [],
+        "revision_instruction": "",
+        "normalized_grades": [
+            {"id": "q1", "score": 88, "feedback": "구체적입니다."},
+        ],
+        "grading_summary": {
+            "weak_points": ["동작 변화 이해가 약함"],
+            "weak_files": ["src/git_study/tui/app.py"],
+            "next_steps": ["동작 유형 문제를 다시 풀어보세요."],
+            "overall_comment": "핵심은 이해했지만 세부 흐름 설명이 부족합니다.",
+        },
+    }
+
+    normalized = normalize_general_grade_review(payload)
+
+    assert normalized["grading_summary"]["weak_files"] == ["src/git_study/tui/app.py"]
+    assert normalized["grading_summary"]["next_steps"] == ["동작 유형 문제를 다시 풀어보세요."]

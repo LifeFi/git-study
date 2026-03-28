@@ -1,10 +1,9 @@
 from collections.abc import Iterator
 
-from ..graphs.inline_grade_graph import inline_grade_graph
-from ..types import InlineQuizGrade, InlineQuizQuestion
+from ..graphs.general_grade_graph import general_grade_graph
 
 
-INLINE_GRADE_NODE_LABELS = {
+GENERAL_GRADE_NODE_LABELS = {
     "prepare_grading_payload": "채점 입력 준비",
     "grade_answers": "답변 채점",
     "validate_grades": "채점 검증",
@@ -12,15 +11,15 @@ INLINE_GRADE_NODE_LABELS = {
 }
 
 
-def stream_inline_grade_progress(
-    questions: list[InlineQuizQuestion],
+def stream_general_grade_progress(
+    questions: list[dict],
     answers: dict[str, str],
     user_request: str = "",
 ) -> Iterator[dict]:
     merged_result: dict = {}
     seen_nodes: set[str] = set()
 
-    for chunk in inline_grade_graph.stream(
+    for chunk in general_grade_graph.stream(
         {
             "questions": questions,
             "answers": answers,
@@ -36,7 +35,7 @@ def stream_inline_grade_progress(
                 yield {
                     "type": "node",
                     "node": node_name,
-                    "label": INLINE_GRADE_NODE_LABELS.get(node_name, node_name),
+                    "label": GENERAL_GRADE_NODE_LABELS.get(node_name, node_name),
                 }
             if isinstance(update, dict):
                 merged_result.update(update)
@@ -44,12 +43,12 @@ def stream_inline_grade_progress(
     yield {"type": "result", "result": merged_result}
 
 
-def generate_inline_quiz_grades(
-    questions: list[InlineQuizQuestion],
+def generate_general_quiz_grades(
+    questions: list[dict],
     answers: dict[str, str],
     user_request: str = "",
-) -> list[InlineQuizGrade]:
-    result = generate_inline_quiz_grade_result(
+) -> list[dict]:
+    result = generate_general_quiz_grade_result(
         questions,
         answers,
         user_request=user_request,
@@ -57,12 +56,12 @@ def generate_inline_quiz_grades(
     return result.get("final_grades", [])
 
 
-def generate_inline_quiz_grade_result(
-    questions: list[InlineQuizQuestion],
+def generate_general_quiz_grade_result(
+    questions: list[dict],
     answers: dict[str, str],
     user_request: str = "",
 ) -> dict:
-    result = inline_grade_graph.invoke(
+    result = general_grade_graph.invoke(
         {
             "questions": questions,
             "answers": answers,

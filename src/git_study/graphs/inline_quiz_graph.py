@@ -18,6 +18,7 @@ from ..types import InlineQuizQuestion
 class InlineQuizGraphState(TypedDict, total=False):
     commit_context: dict[str, Any]
     count: int
+    user_request: str
     actual_paths: list[str]
     file_context_map: dict[str, str]
     anchor_candidates: list[dict[str, str]]
@@ -116,6 +117,7 @@ def generate_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
             state.get("validated_anchors", []), ensure_ascii=False, indent=2
         ),
         count=count,
+        user_request=str(state.get("user_request", "")).strip(),
     )
     items = normalize_inline_questions(LLMClient().invoke_json(prompt))
     questions: list[InlineQuizQuestion] = []

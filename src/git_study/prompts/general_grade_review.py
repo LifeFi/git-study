@@ -1,11 +1,11 @@
-def build_inline_grade_review_prompt(
+def build_general_grade_review_prompt(
     *,
     grades_json: str,
     question_ids_json: str,
     questions_json: str,
 ) -> str:
     return f"""
-You are validating inline quiz grading output.
+You are validating general quiz grading output.
 
 Expected question ids:
 {question_ids_json}
@@ -35,7 +35,7 @@ Return ONLY raw JSON:
 Validation rules:
 - Every expected question id should appear exactly once.
 - score must be an integer between 0 and 100.
-- feedback must be non-empty Korean text with concrete comparison to the model answer.
+- feedback must be non-empty Korean text with concrete comparison to the expected answer.
 - grading_summary must be concise Korean guidance derived from the graded results.
 - If valid, copy the cleaned array into normalized_grades and keep revision_instruction empty.
 - If invalid, set is_valid to false and explain what to fix.

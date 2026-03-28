@@ -1,12 +1,20 @@
-def build_quiz_review_prompt(*, quiz_markdown: str, analysis_json: str) -> str:
+def build_quiz_review_prompt(
+    *,
+    quiz_questions_json: str,
+    analysis_json: str,
+    user_request: str,
+) -> str:
     return f"""
 You are reviewing a generated Git-study quiz for quality and instruction compliance.
+
+User request:
+{user_request}
 
 Analysis reference:
 {analysis_json}
 
-Generated markdown:
-{quiz_markdown}
+Generated questions JSON:
+{quiz_questions_json}
 
 Return ONLY raw JSON:
 {{
@@ -16,9 +24,12 @@ Return ONLY raw JSON:
 }}
 
 Review rules:
-- Check whether the markdown has the required sections and exactly 4 questions.
+- Check whether the JSON contains exactly 4 grounded questions.
+- Check whether the 4 question types cover intent, behavior, tradeoff, and vulnerability.
 - Check whether the questions are not trivial one-line spot-the-diff trivia.
 - Check whether the content stays grounded in the given analysis.
+- Check whether the quiz obeys all hard constraints in the user request.
+- If the user excluded a file such as `AGENTS.md`, reject any question that references it directly or indirectly.
 - If the quiz is acceptable, set is_valid to true.
 - If it needs revision, set is_valid to false and provide a compact revision_instruction in Korean.
 """.strip()

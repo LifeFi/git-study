@@ -218,11 +218,19 @@ def highlight_code_lines(content: str, language: str) -> list[Text]:
             lexer = get_lexer_by_name(language)
         except Exception:
             lexer = TextLexer()
-    ansi = highlight(content or "\n", lexer, Terminal256Formatter(style="monokai"))
-    lines = ansi.splitlines()
-    if not lines:
+    source = content or "\n"
+    ansi = highlight(source, lexer, Terminal256Formatter(style="monokai"))
+    highlighted_lines = [Text.from_ansi(line) for line in ansi.splitlines()]
+    expected_line_count = max(1, len(source.splitlines()))
+
+    if len(highlighted_lines) < expected_line_count:
+        highlighted_lines.extend(Text() for _ in range(expected_line_count - len(highlighted_lines)))
+    elif len(highlighted_lines) > expected_line_count:
+        highlighted_lines = highlighted_lines[:expected_line_count]
+
+    if not highlighted_lines:
         return [Text()]
-    return [Text.from_ansi(line) for line in lines]
+    return highlighted_lines
 
 
 def tint_line(line: Text, style: str, pad_to: int = 0) -> Text:
@@ -276,6 +284,27 @@ class CodeBrowserDock(Vertical):
 
     #code-browser-header-spacer {
         width: 1fr;
+    }
+
+    #code-browser-close {
+        width: auto;
+        min-width: 5;
+        height: 1;
+        min-height: 1;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: cyan;
+        text-style: bold;
+        tint: transparent;
+    }
+
+    #code-browser-close:hover,
+    #code-browser-close:focus {
+        background: transparent;
+        border: none;
+        color: cyan;
+        text-style: bold underline;
     }
 
     #code-browser-body {
@@ -465,6 +494,7 @@ class CodeBrowserDock(Vertical):
             with Horizontal(id="code-browser-header"):
                 yield Label("Code Browser", id="code-browser-title")
                 yield Static("", id="code-browser-header-spacer")
+                yield Button("Close", id="code-browser-close")
             with Horizontal(id="code-browser-body"):
                 with Vertical(id="code-file-panel"):
                     with Horizontal(id="code-file-header"):

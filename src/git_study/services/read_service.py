@@ -3,29 +3,29 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from ..graphs.quiz_graph import quiz_graph
+from ..graphs.read_graph import read_graph
 
 
-QUIZ_NODE_LABELS = {
+READ_NODE_LABELS = {
     "resolve_commit_context": "컨텍스트 준비",
     "analyze_change": "변경 분석",
-    "draft_quiz": "초안 생성",
-    "review_quiz": "품질 검토",
-    "finalize_quiz": "결과 정리",
+    "draft_reading": "읽을거리 초안 생성",
+    "review_reading": "품질 검토",
+    "finalize_reading": "결과 정리",
 }
 
 
-def _quiz_config() -> dict[str, Any]:
+def _read_config() -> dict[str, Any]:
     return {"configurable": {"thread_id": "textual-tui-session"}}
 
 
-def stream_quiz_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def stream_read_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
     merged_result: dict[str, Any] = {}
     seen_nodes: set[str] = set()
 
-    for chunk in quiz_graph.stream(
+    for chunk in read_graph.stream(
         payload,
-        config=_quiz_config(),
+        config=_read_config(),
         stream_mode="updates",
     ):
         if not isinstance(chunk, dict):
@@ -36,7 +36,7 @@ def stream_quiz_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield {
                     "type": "node",
                     "node": node_name,
-                    "label": QUIZ_NODE_LABELS.get(node_name, node_name),
+                    "label": READ_NODE_LABELS.get(node_name, node_name),
                 }
             if isinstance(update, dict):
                 merged_result.update(update)
@@ -46,10 +46,10 @@ def stream_quiz_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
     yield {"type": "result", "result": merged_result}
 
 
-def run_quiz(payload: dict[str, Any]) -> dict[str, Any]:
-    result = quiz_graph.invoke(
+def run_read(payload: dict[str, Any]) -> dict[str, Any]:
+    result = read_graph.invoke(
         payload,
-        config=_quiz_config(),
+        config=_read_config(),
     )
     final_output = str(result.get("final_output", ""))
     result["messages"] = [AIMessage(content=final_output)]

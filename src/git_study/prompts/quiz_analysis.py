@@ -54,7 +54,7 @@ Return ONLY raw JSON:
   ],
   "question_plan": [
     {{
-      "type": "intent | code_reading | behavior_change | risk_tradeoff",
+      "type": "intent | behavior | tradeoff | vulnerability",
       "focus": "question focus in Korean",
       "path": "most relevant file path",
       "code_hint": "brief code cue from the provided context"
@@ -66,6 +66,8 @@ Return ONLY raw JSON:
 Rules:
 - Respond in Korean.
 - Base everything only on the provided commit metadata, diff, and file context.
-- The 4 question_plan items must cover intent, code_reading, behavior_change, risk_tradeoff exactly once each.
+- Treat the user request as a hard constraint, especially when it forbids certain files, topics, or question angles.
+- If the user explicitly excludes a file such as `AGENTS.md`, do not center the analysis on that file.
+- The 4 question_plan items must cover intent, behavior, tradeoff, vulnerability exactly once each.
 - Do not invent code that is not supported by the provided context.
 """.strip()

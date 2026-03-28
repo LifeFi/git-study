@@ -8,7 +8,7 @@
 
 ## 이런 도구입니다
 
-- 최근 커밋이나 선택한 커밋 범위를 읽고 학습용 퀴즈를 생성합니다.
+- 최근 커밋이나 선택한 커밋 범위를 읽고 학습용 퀴즈를 생성하고 채점합니다.
 - 단순 diff만 보지 않고 변경 파일의 전체 코드 문맥도 함께 사용합니다.
 - Textual TUI에서 커밋 탐색, 결과 저장/불러오기, 코드 브라우저, 인라인 퀴즈를 제공합니다.
 - OpenAI API Key는 환경변수 또는 앱 내부 설정으로 넣을 수 있습니다.
@@ -95,10 +95,10 @@ OPENAI_API_KEY=...
 ## 빠른 사용 흐름
 
 1. `git-study`를 실행합니다.
-2. `Local .git` 또는 `GitHub Repo`를 선택합니다.
+2. `Local` 또는 `GitHub`를 선택합니다.
 3. 커밋을 고릅니다.
-4. `Gen`으로 일반 퀴즈를 생성합니다.
-5. 상단 `Quiz`로 인라인 퀴즈를 엽니다.
+4. `Session`의 `Gen`으로 `Read`, `Quiz`, `Inline` 흐름을 시작합니다.
+5. 각 탭에서 일반 퀴즈와 인라인 퀴즈를 풀고 채점합니다.
 6. 필요하면 `Code`로 코드 브라우저를 열어 변경 내용을 함께 봅니다.
 
 ## 주요 기능
@@ -108,7 +108,7 @@ OPENAI_API_KEY=...
 - `auto`, `latest`, `selected` 커밋 모드를 지원합니다.
 - 난이도: `Easy`, `Medium`, `Hard`
 - 스타일: `Mixed`, `Study Session`, `Multiple Choice`, `Short Answer`, `Conceptual`
-- 결과를 markdown 또는 plain text로 저장하고 다시 불러올 수 있습니다.
+- 세션 안에서 답변을 저장하고 채점할 수 있습니다.
 
 ### 인라인 퀴즈
 
@@ -161,7 +161,9 @@ UV_CACHE_DIR=/tmp/uv-cache uv run langgraph dev
 
 현재 주요 graph는 다음과 같습니다.
 
+- `commit_diff_reading_v1`: 읽을거리 생성
 - `commit_diff_quiz_v2`: 일반 퀴즈 생성
+- `general_quiz_grading_v1`: 일반 퀴즈 채점
 - `inline_quiz_questions_v2`: 인라인 퀴즈 질문 생성
 - `inline_quiz_grading_v2`: 인라인 퀴즈 채점
 
@@ -183,11 +185,15 @@ UV_CACHE_DIR=/tmp/uv-cache uv run langgraph dev
 - `src/git_study/domain/repo_cache.py`
 - `src/git_study/domain/code_context.py`
 - `src/git_study/graphs/quiz_graph.py`
+- `src/git_study/graphs/read_graph.py`
 - `src/git_study/graphs/inline_quiz_graph.py`
+- `src/git_study/graphs/general_grade_graph.py`
 - `src/git_study/graphs/inline_grade_graph.py`
 - `src/git_study/llm/schemas.py`
 - `src/git_study/types.py`
 - `src/git_study/services/quiz_service.py`
+- `src/git_study/services/general_grade_service.py`
+- `src/git_study/services/read_service.py`
 - `src/git_study/services/inline_quiz_service.py`
 - `src/git_study/services/inline_grade_service.py`
 - `tests/test_schemas.py`

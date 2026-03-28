@@ -6,7 +6,11 @@ def build_inline_question_prompt(
     file_context_text: str,
     anchor_candidates_json: str,
     count: int,
+    user_request: str = "",
 ) -> str:
+    request_block = (
+        f"\nAdditional request:\n{user_request.strip()}\n" if user_request.strip() else ""
+    )
     return f"""
 You are a senior engineer creating inline code quiz questions anchored to specific source code locations.
 
@@ -20,6 +24,7 @@ File context:
 
 Diff:
 {diff_text}
+{request_block}
 
 Task: Create exactly {count} quiz questions from the validated anchors above.
 

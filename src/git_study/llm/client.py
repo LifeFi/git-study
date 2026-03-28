@@ -11,14 +11,18 @@ from ..settings import DEFAULT_MODEL, load_settings
 def extract_json_block(text: str) -> str:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if match:
-        return match.group(1).strip()
-    object_match = re.search(r"(\{[\s\S]*\})", text)
-    if object_match:
-        return object_match.group(1).strip()
-    array_match = re.search(r"(\[[\s\S]*\])", text)
-    if array_match:
-        return array_match.group(1).strip()
-    return text.strip()
+        text = match.group(1).strip()
+    stripped = text.strip()
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(stripped):
+        if char not in "[{":
+            continue
+        try:
+            _, end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        return stripped[index : index + end]
+    return stripped
 
 
 class LLMClient:
