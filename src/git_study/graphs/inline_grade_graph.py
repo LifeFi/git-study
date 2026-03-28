@@ -1,6 +1,7 @@
 import json
 from typing import TypedDict
 
+from pydantic import BaseModel, Field, RootModel
 from langgraph.graph import END, START, StateGraph
 
 from ..llm.client import LLMClient
@@ -21,6 +22,33 @@ class InlineGradeGraphState(TypedDict, total=False):
     grading_summary: dict
 
 
+class InlineGradeStructuredOutput(BaseModel):
+    id: str = Field(default="")
+    score: int = Field(default=0)
+    feedback: str = Field(default="")
+
+
+class InlineGradeListStructuredOutput(RootModel[list[InlineGradeStructuredOutput]]):
+    root: list[InlineGradeStructuredOutput] = Field(default_factory=list)
+
+
+class GradingSummaryStructuredOutput(BaseModel):
+    weak_points: list[str] = Field(default_factory=list)
+    weak_files: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    overall_comment: str = Field(default="")
+
+
+class InlineGradeReviewStructuredOutput(BaseModel):
+    is_valid: bool = Field(default=False)
+    issues: list[str] = Field(default_factory=list)
+    revision_instruction: str = Field(default="")
+    normalized_grades: list[InlineGradeStructuredOutput] = Field(default_factory=list)
+    grading_summary: GradingSummaryStructuredOutput = Field(
+        default_factory=GradingSummaryStructuredOutput
+    )
+
+
 def prepare_grading_payload(state: InlineGradeGraphState) -> InlineGradeGraphState:
     blocks: list[str] = []
     for question in state.get("questions", []):
@@ -36,13 +64,17 @@ def prepare_grading_payload(state: InlineGradeGraphState) -> InlineGradeGraphSta
 
 
 def grade_answers(state: InlineGradeGraphState) -> InlineGradeGraphState:
+    grades_payload = LLMClient().invoke_structured(
+        build_inline_grade_prompt(
+            question_blocks=state.get("question_blocks", ""),
+            user_request=str(state.get("user_request", "")).strip(),
+        ),
+        InlineGradeListStructuredOutput,
+    )
     grades = normalize_inline_grades(
-        LLMClient().invoke_json(
-            build_inline_grade_prompt(
-                question_blocks=state.get("question_blocks", ""),
-                user_request=str(state.get("user_request", "")).strip(),
-            )
-        )
+        grades_payload.model_dump()
+        if hasattr(grades_payload, "model_dump")
+        else grades_payload
     )
     return {"raw_grades": grades}
 
@@ -58,28 +90,38 @@ def validate_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
         }
         for question in state.get("questions", [])
     ]
+    review_payload = LLMClient().invoke_structured(
+        build_inline_grade_review_prompt(
+            grades_json=json.dumps(
+                state.get("raw_grades", []), ensure_ascii=False, indent=2
+            ),
+            question_ids_json=json.dumps(expected_ids, ensure_ascii=False),
+            questions_json=json.dumps(question_metadata, ensure_ascii=False, indent=2),
+        ),
+        InlineGradeReviewStructuredOutput,
+    )
     review_result = normalize_inline_grade_review(
-        LLMClient().invoke_json(
-            build_inline_grade_review_prompt(
-                grades_json=json.dumps(
-                    state.get("raw_grades", []), ensure_ascii=False, indent=2
-                ),
-                question_ids_json=json.dumps(expected_ids, ensure_ascii=False),
-                questions_json=json.dumps(question_metadata, ensure_ascii=False, indent=2),
-            )
-        )
+        review_payload.model_dump()
+        if hasattr(review_payload, "model_dump")
+        else review_payload
     )
     return {"review_result": review_result}
 
 
 def finalize_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
     review = state.get("review_result", {})
-    source = review.get("normalized_grades", state.get("raw_grades", []))
+    normalized_grades = review.get("normalized_grades")
+    source = (
+        normalized_grades
+        if isinstance(normalized_grades, list) and normalized_grades
+        else state.get("raw_grades", [])
+    )
     final_grades: list[InlineQuizGrade] = []
     expected_ids = [question["id"] for question in state.get("questions", [])]
     seen_ids: set[str] = set()
+    source_items = list(source) if isinstance(source, list) else []
 
-    for item in source:
+    for item in source_items:
         grade_id = str(item.get("id", "")).strip()
         if not grade_id or grade_id in seen_ids or grade_id not in expected_ids:
             continue
@@ -97,6 +139,24 @@ def finalize_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
                 feedback=feedback,
             )
         )
+
+    if not final_grades and source_items:
+        for question, item in zip(state.get("questions", []), source_items):
+            try:
+                score = int(item.get("score", 0))
+            except Exception:
+                score = 0
+            feedback = (
+                str(item.get("feedback", "")).strip()
+                or "피드백이 충분히 생성되지 않았습니다."
+            )
+            final_grades.append(
+                InlineQuizGrade(
+                    id=question["id"],
+                    score=max(0, min(100, score)),
+                    feedback=feedback,
+                )
+            )
 
     grade_map = {grade["id"]: grade for grade in final_grades}
     completed: list[InlineQuizGrade] = []

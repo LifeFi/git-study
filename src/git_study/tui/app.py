@@ -65,6 +65,7 @@ from .commit_selection import (
     update_selection_for_index,
 )
 from .code_browser import CodeBrowserDock
+from .answer_input import AnswerTextArea
 from .repo_loading import (
     apply_commit_snapshot_state,
     current_repo_key,
@@ -109,12 +110,13 @@ from .widgets import (
     LabeledMarkdownViewer,
     RemoteRepoCacheScreen,
     ResultLoadScreen,
+    SessionHomeView,
     SessionListScreen,
     SessionInlineView,
     SessionMarkdownView,
     SessionQuizView,
     SessionReviewView,
-    SessionSetupView,
+    SetupScreen,
 )
 from .inline_quiz import InlineQuizDock, InlineQuizSavedState, InlineQuizWidget
 
@@ -136,29 +138,47 @@ class QuizGenerated(Message):
         content: str,
         created_at: str,
         questions: list[GeneralQuizQuestion],
+        target: dict[str, object] | None = None,
     ) -> None:
         self.content = content
         self.created_at = created_at
         self.questions = questions
+        self.target = target
         super().__init__()
 
 
 class QuizFailed(Message):
-    def __init__(self, error_message: str) -> None:
+    def __init__(
+        self,
+        error_message: str,
+        target: dict[str, object] | None = None,
+    ) -> None:
         self.error_message = error_message
+        self.target = target
         super().__init__()
 
 
 class ReadGenerated(Message):
-    def __init__(self, content: str, created_at: str) -> None:
+    def __init__(
+        self,
+        content: str,
+        created_at: str,
+        target: dict[str, object] | None = None,
+    ) -> None:
         self.content = content
         self.created_at = created_at
+        self.target = target
         super().__init__()
 
 
 class ReadFailed(Message):
-    def __init__(self, error_message: str) -> None:
+    def __init__(
+        self,
+        error_message: str,
+        target: dict[str, object] | None = None,
+    ) -> None:
         self.error_message = error_message
+        self.target = target
         super().__init__()
 
 
@@ -175,23 +195,36 @@ class GeneralQuizGraded(Message):
         grades: list[dict],
         score_summary: dict,
         grading_summary: GradingSummary | None = None,
+        target: dict[str, object] | None = None,
     ) -> None:
         self.grades = grades
         self.score_summary = score_summary
         self.grading_summary = grading_summary or {}
+        self.target = target
         super().__init__()
 
 
 class GeneralQuizGradeFailed(Message):
-    def __init__(self, error_message: str) -> None:
+    def __init__(
+        self,
+        error_message: str,
+        target: dict[str, object] | None = None,
+    ) -> None:
         self.error_message = error_message
+        self.target = target
         super().__init__()
 
 
 class QuizNodeStarted(Message):
-    def __init__(self, node_name: str, label: str) -> None:
+    def __init__(
+        self,
+        node_name: str,
+        label: str,
+        target: dict[str, object] | None = None,
+    ) -> None:
         self.node_name = node_name
         self.label = label
+        self.target = target
         super().__init__()
 
 
@@ -242,7 +275,7 @@ class GitStudyApp(App):
         border: none;
         padding: 0;
         margin-bottom: 0;
-        background: $panel;
+        background: #181818;
         align: left middle;
     }
 
@@ -286,7 +319,7 @@ class GitStudyApp(App):
         min-width: 48;
         height: 6;
         min-height: 6;
-        border: round $accent;
+        border: round #b88a3b;
         padding: 0 1;
         margin: 0;
         layout: vertical;
@@ -522,7 +555,7 @@ class GitStudyApp(App):
     #commit-panel {
         width: 48;
         min-width: 48;
-        border: round $accent;
+        border: round #b88a3b;
         padding: 0 1;
     }
 
@@ -581,7 +614,7 @@ class GitStudyApp(App):
 
     #result-panel,
     #settings-panel {
-        border: round $accent;
+        border: round #b88a3b;
         padding: 0 1;
     }
 
@@ -655,11 +688,17 @@ class GitStudyApp(App):
         margin-top: 0;
         padding-top: 0;
         padding-bottom: 0;
+        background: #181818;
     }
 
     #settings-row {
         height: auto;
         align: left middle;
+        background: #181818;
+    }
+
+    Footer {
+        background: #181818;
     }
 
     #settings-row > .section-title {
@@ -818,6 +857,7 @@ class GitStudyApp(App):
     }
 
     #result-setup-view,
+    #result-home-view,
     #result-read-view,
     #result-quiz-view,
     #result-inline-view,
@@ -825,6 +865,16 @@ class GitStudyApp(App):
         height: 1fr;
         margin: 0;
         padding: 0;
+    }
+
+    #result-home-content {
+        margin-top: 2;
+        padding: 0 1;
+    }
+
+    #result-home-scroll {
+        height: 1fr;
+        overflow-y: auto;
     }
 
     #result-setup-view {
@@ -922,6 +972,33 @@ class GitStudyApp(App):
         background: $surface;
     }
 
+    #result-quiz-nav {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    .result-quiz-nav-btn {
+        width: auto;
+        min-width: 5;
+        height: auto;
+        min-height: 1;
+        padding: 0 1;
+        background: $boost;
+        border: none;
+        color: $text;
+        text-style: bold;
+        margin-right: 1;
+    }
+
+    .result-quiz-nav-btn.-active {
+        color: $text;
+        background: $accent 20%;
+    }
+
+    .result-quiz-nav-btn.-answered {
+        color: $text;
+    }
+
     #result-quiz-meta {
         height: auto;
         color: $success;
@@ -950,6 +1027,12 @@ class GitStudyApp(App):
         margin-bottom: 1;
     }
 
+    #result-quiz-answer-label {
+        height: auto;
+        color: $text-muted;
+        margin-bottom: 0;
+    }
+
     #result-quiz-answer {
         height: 8;
         margin-top: 1;
@@ -959,7 +1042,7 @@ class GitStudyApp(App):
     #result-quiz-feedback {
         height: auto;
         color: $text-muted;
-        margin-bottom: 1;
+        margin-top: 1;
         border: round $panel;
         padding: 1;
         background: $boost;
@@ -968,6 +1051,16 @@ class GitStudyApp(App):
     #result-quiz-controls {
         height: auto;
         align: left middle;
+    }
+
+    #result-quiz-controls-spacer {
+        width: 1fr;
+    }
+
+    #result-quiz-grade,
+    #result-quiz-retry,
+    #result-quiz-status {
+        display: none;
     }
 
     #result-quiz-status {
@@ -1034,6 +1127,11 @@ class GitStudyApp(App):
         width: 13;
         min-width: 13;
         content-align: left middle;
+    }
+
+    #result-tab-home {
+        width: 6;
+        min-width: 6;
     }
 
     .result-tool:hover,
@@ -1226,12 +1324,15 @@ class GitStudyApp(App):
         self._last_seen_total_commit_count = self.total_commit_count
         self._last_seen_repo_key = "local"
         self._last_remote_refresh_check_at = 0.0
+        self._result_quiz_nav_build_serial = 0
+        self.home_content = self._default_result_text()
+        self.home_logo_samples = self._home_logo_samples()
         self.result_content = self._default_result_text()
         self.read_content = self._default_result_text()
         self.quiz_content = self._default_result_text()
         self.inline_content = "인라인 퀴즈가 아직 없습니다."
         self.review_content = "리뷰 결과가 아직 없습니다."
-        self.result_tab = "setup"
+        self.result_tab = "home"
         self.result_view_mode = "markdown"
         self.result_metadata_expanded = False
         self._commit_list_loading_enabled = False
@@ -1241,6 +1342,8 @@ class GitStudyApp(App):
         self._quiz_status_base = "퀴즈 생성 중"
         self._quiz_progress_label = ""
         self._quiz_generation_error_message = ""
+        self._quiz_progress_labels: dict[str, str] = {}
+        self._quiz_error_messages: dict[str, str] = {}
         self._read_generation_in_progress = False
         self._read_animation_frame = 0
         self._read_status_base = "읽을거리 생성 중"
@@ -1252,19 +1355,255 @@ class GitStudyApp(App):
         self._restoring_general_quiz_answer = False
         self._general_quiz_grading_in_progress = False
         self._pending_quiz_target: dict[str, object] | None = None
+        self._pending_quiz_targets: dict[str, dict[str, object]] = {}
         self._pending_read_target: dict[str, object] | None = None
+        self._pending_read_targets: dict[str, dict[str, object]] = {}
         self._pending_general_quiz_grade_target: dict[str, object] | None = None
         self._inline_session_targets: dict[str, dict[str, object]] = {}
+        self._pending_inline_targets: dict[str, dict[str, object]] = {}
+        self._pending_inline_grade_targets: dict[str, dict[str, object]] = {}
 
     def _default_result_text(self) -> str:
         return (
-            "왼쪽에서 커밋이나 범위를 고른 뒤, 오른쪽 `Setup` 탭에서 설정을 확인하고 "
+            "왼쪽에서 커밋이나 범위를 고른 뒤, 오른쪽 `Setup` 버튼에서 설정을 확인하고 "
             "`Read`, `Quiz`, `Inline` 순서로 학습을 진행할 수 있습니다."
         )
 
+    def _home_logo_samples(self) -> list[dict[str, object]]:
+        return [
+            {
+                "name": "Potion Ref Yellow",
+                "color": "#9aa4b2",
+                "outline_color": "#9aa4b2",
+                "fill_color": "#ffd400",
+                "particle_color": "#ffd400",
+                "cap_color": "#b5653b",
+                "art": [
+                    "         P   P",
+                    "      CCCCC",
+                    "       OOO",
+                    "      OO OO",
+                    "     OOFFFOO",
+                    "    OOFFFFFOO",
+                    "    OFFFFFFFO",
+                    "    OOFFFFFOO",
+                    "     OOOOOOO",
+                ],
+            },
+            {
+                "name": "INT Drift Amber",
+                "color": "#3a86ff",
+                "outline_color": "#3a86ff",
+                "fill_color": "#ffbf00",
+                "particle_color": "#ffbf00",
+                "art": [
+                    "                P P",
+                    "           P  P",
+                    "        O",
+                    "     OO   OO",
+                    "   OOOFFFFFFOOO",
+                    "  OOFFFFFFFFFFOO",
+                    "  OOFFFFFFFFFFOO",
+                    "   OOFFFFFFFFOO",
+                    "     OOFFFFOO",
+                    "       OOFFO",
+                ],
+            },
+            {
+                "name": "INT Flask Sym A",
+                "color": "#3a86ff",
+                "outline_color": "#3a86ff",
+                "fill_color": "#ffdf00",
+                "particle_color": "#ffdf00",
+                "art": [
+                    "             P",
+                    "          P PP",
+                    "        OO  OO",
+                    "      OOFFFFFOO",
+                    "     OFFFFFFFFO",
+                    "    OOFFFFFFFFOO",
+                    "    OOFFFFFFFFOO",
+                    "     OFFFFFFFFO",
+                    "      OOFFFFOO",
+                    "        OOOO",
+                ],
+            },
+            {
+                "name": "INT Flask Sym B",
+                "color": "#4f7cff",
+                "outline_color": "#4f7cff",
+                "fill_color": "#ffd400",
+                "particle_color": "#ffd400",
+                "art": [
+                    "            P P",
+                    "         P PP",
+                    "       OO  OO",
+                    "      OOFFFFOO",
+                    "    OOOFFFFFFOOO",
+                    "    OFFFFFFFFFFO",
+                    "    OFFFFFFFFFFO",
+                    "     OOFFFFFFOO",
+                    "      OOFFFFOO",
+                    "        OOOO",
+                ],
+            },
+            {
+                "name": "INT Flask Sym C",
+                "color": "#5dade2",
+                "outline_color": "#5dade2",
+                "fill_color": "#ffea00",
+                "particle_color": "#ffea00",
+                "art": [
+                    "              P",
+                    "           P PP",
+                    "         OO  OO",
+                    "      OOOFFFFOOO",
+                    "     OOFFFFFFFFOO",
+                    "    OOFFFFFFFFFFOO",
+                    "    OOFFFFFFFFFFOO",
+                    "     OOFFFFFFFFOO",
+                    "      OOOFFFFOOO",
+                    "         OOOO",
+                ],
+            },
+            {
+                "name": "Potion Gray A",
+                "color": "#cfcfcf",
+                "outline_color": "#cfcfcf",
+                "fill_color": "#ffd400",
+                "particle_color": "#ffd400",
+                "art": [
+                    "            P PP",
+                    "         PP  P",
+                    "       OO  OO",
+                    "     OOFFFFOO",
+                    "   OOFFFFFFFFOO",
+                    "  OOFFFFFFFFFFOO",
+                    "   OOFFFFFFFFOO",
+                    "     OOFFFFOO",
+                    "       OOFFOO",
+                ],
+            },
+            {
+                "name": "Potion Gray B",
+                "color": "#d8d8d8",
+                "outline_color": "#d8d8d8",
+                "fill_color": "#ffdf00",
+                "particle_color": "#ffdf00",
+                "art": [
+                    "             P",
+                    "          P PP",
+                    "        OO  OO",
+                    "      OOFFFFFOO",
+                    "    OOFFFFFFFFFOO",
+                    "   OOFFFFFFFFFFFFOO",
+                    "    OOFFFFFFFFFFOO",
+                    "      OOFFFFFFOO",
+                    "        OOFFOO",
+                ],
+            },
+            {
+                "name": "Potion Blue A",
+                "color": "#4f7cff",
+                "outline_color": "#4f7cff",
+                "fill_color": "#ffd400",
+                "particle_color": "#ffd400",
+                "art": [
+                    "            P PP",
+                    "         PP  P",
+                    "       OO  OO",
+                    "     OOFFFFOO",
+                    "   OOFFFFFFFFOO",
+                    "  OOFFFFFFFFFFOO",
+                    "   OOFFFFFFFFOO",
+                    "     OOFFFFOO",
+                    "       OOFFOO",
+                ],
+            },
+            {
+                "name": "Potion Blue B",
+                "color": "#3a86ff",
+                "outline_color": "#3a86ff",
+                "fill_color": "#ffea00",
+                "particle_color": "#ffea00",
+                "art": [
+                    "             P",
+                    "          P PP",
+                    "        OO  OO",
+                    "      OOFFFFFOO",
+                    "    OOFFFFFFFFFOO",
+                    "   OOFFFFFFFFFFFFOO",
+                    "    OOFFFFFFFFFFOO",
+                    "      OOFFFFFFOO",
+                    "        OOFFOO",
+                ],
+            },
+            {
+                "name": "Potion Blue C",
+                "color": "#5dade2",
+                "outline_color": "#5dade2",
+                "fill_color": "#ffd60a",
+                "particle_color": "#ffd60a",
+                "art": [
+                    "              P",
+                    "           P PP",
+                    "         OO  OO",
+                    "      OOOFFFFOOO",
+                    "    OOFFFFFFFFFOO",
+                    "   OOFFFFFFFFFFFFOO",
+                    "    OOFFFFFFFFFFOO",
+                    "      OOOFFFFOOO",
+                    "         OOFFOO",
+                ],
+            },
+            {"name": "INT Drift Flat A", "color": "#ffd166", "art": ["              ▒ ▒", "         ▒ ▒", "      ▓▓", "    ▓▓  ▓▓", "  ▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "  ▓▓▓▒▒▒▒▒▒▒▓▓▓", "    ▓▓▓▓▓▓▓▓"]},
+            {"name": "INT Drift Flat B", "color": "#ffcf5a", "art": ["               ▒", "          ▒ ▒", "      ▓▓", "    ▓▓  ▓▓", "  ▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "  ▓▓▓▒▒▒▒▒▒▒▓▓▓", "    ▓▓▓▓▓▓▓▓"]},
+            {"name": "INT Drift Flat C", "color": "#e9c46a", "art": ["                ▒ ▒", "           ▒ ▒", "       ▓", "    ▓▓   ▓▓", "  ▓▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▒▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▒▓▓▓▓", "  ▓▓▓▒▒▒▒▒▒▒▒▓▓▓", "    ▓▓▓▓▓▓▓▓▓"]},
+            {"name": "INT Drift Flat D", "color": "#ffdc73", "art": ["              ▒ ✦", "         ▒ ▒", "      ▓▓", "    ▓▓  ▓▓", "  ▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "  ▓▓▓▒▒▒▒▒▒▒▓▓▓", "    ▓▓▓▓▓▓▓▓"]},
+            {"name": "INT Drift Flat E", "color": "#f6bd60", "art": ["                ▒", "           ▒ ▒", "      ▓▓", "    ▓▓  ▓▓", "  ▓▓▓▓▓▓▓▓▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "▓▓▓▓▒▒▒▒▒▒▒▒▒▓▓▓▓", "  ▓▓▓▒▒▒▒▒▒▒▓▓▓", "    ▓▓▓▓▓▓▓▓"]},
+            {"name": "Brain", "color": "#ff7a59", "art": ["  ████████", " ███ ██ ███", "████ ██ ████", "████ ██ ████", " ███ ██ ███", "  ████████"]},
+            {"name": "Lightbulb", "color": "#ffd166", "art": ["   ██████", " ███ ██ ███", " ██████████", "  ████████", "   ██████", "   ██████"]},
+            {"name": "Notebook", "color": "#4ecdc4", "art": [" ██████████", " ██ ███████", " ██ ██ ████", " ██ ███████", " ██ ███████", " ██████████"]},
+            {"name": "Eraser", "color": "#ff8fab", "art": ["   ████████", " ████████████", " ████  ██████", " ████  ██████", "   ████████"]},
+            {"name": "Pocket Note", "color": "#95d5b2", "art": [" ██████████", " █ ████████", " █ ██ ██ ██", " █ ████████", " █ ████████", " ██████████"]},
+            {"name": "Commit", "color": "#f28482", "art": ["  ████████", " ███ ███ ███", " ███████████", " ███ ███ ███", " ███████████", "  ████████"]},
+            {"name": "INT Potion", "color": "#c77dff", "art": ["    ████", "   ██████", "  ███  ███", "  ████████", " ██████████", "  ████████"]},
+            {"name": "Mana Potion", "color": "#5dade2", "art": ["    ████", "   ██████", "  ███  ███", "  ███ ██ ██", " ██████████", "  ████████"]},
+            {"name": "Lime Potion", "color": "#80ed99", "art": ["    ████", "   ██████", "  ███  ███", "  ██ ███ ██", " ██████████", "  ████████"]},
+            {"name": "Coral Potion", "color": "#ff6b6b", "art": ["    ████", "   ██████", "  ███  ███", "  ██ █  ███", " ██████████", "  ████████"]},
+            {"name": "Potion A", "color": "#c77dff", "art": ["    ██████", "  ██████████", " ███      ███", "████  ▒▒▒▒  ████", "████ ▒▒▒▒▒▒ ████", " ████▒▒▒▒▒▒████", "  ████████████", "    ████████"]},
+            {"name": "Potion B", "color": "#5dade2", "art": ["    ██████", "  ██████████", " ███      ███", "████  ░░░░  ████", "████ ░░░░░░ ████", " ████░░░░░░████", "  ████████████", "    ████████"]},
+            {"name": "Potion C", "color": "#ffd166", "art": ["     ████", "   ████████", " ████    ████", "████  ▓▓▓▓  ████", "████ ▓▓▓▓▓▓ ████", " ████▓▓▓▓▓▓████", "  ████████████", "    ████████"]},
+            {"name": "Potion D", "color": "#ff8fab", "art": ["    ██████", "  ██████████", " ███      ███", "████  ✦▒▒  ████", "████ ▒▒▒▒▒▒ ████", " ████▒▒▒▒▒▒████", "  ████████████", "    ████████"]},
+            {"name": "Tilt Potion A", "color": "#3a86ff", "art": ["      ███", "    ██████", "   ███  ███", "  ███    ███", "  ██ ▒▒▒▒██", "   █▒▒▒▒██", "    █████"]},
+            {"name": "Tilt Potion B", "color": "#9d4edd", "art": ["      ███", "    ██████", "   ██   ███", "  ███    ███", "  ██ ░░░░██", "   █░░░░██", "    █████"]},
+            {"name": "Tilt Potion C", "color": "#ef476f", "art": ["      ███", "    ██████", "   ███  ███", "  ███    ███", "  ██ ▓▓▓▓██", "   █▓▓▓▓██", "    █████"]},
+            {"name": "Bottle A", "color": "#3a86ff", "art": ["   ██", "  ████", "  ████", " ██████", " ██  ███", " ███████", "  █████"]},
+            {"name": "Bottle B", "color": "#5dade2", "art": ["   ██", "  ████", " ██████", " ██  ███", " █ ▓▓ ██", " ██▓▓███", "  █████"]},
+            {"name": "Bottle C", "color": "#9d4edd", "art": ["   ██", "  ████", " ██████", " ██  ███", " █ ▒▒ ██", " ██▒▒███", "  █████"]},
+            {"name": "Bottle D", "color": "#ffd166", "art": ["   ██", "  ████", " ██████", " ██  ███", " █ ██ ██", " ██▒▒███", "  █████"]},
+            {"name": "Bottle E", "color": "#ef476f", "art": ["   ██", "  ████", " ██████", " ██  ███", " █ ░░ ██", " ██░░███", "  █████"]},
+            {"name": "Amber Drop", "color": "#f6bd60", "art": ["   ███", "  █████", " ███████", " ███ ███", "  █████", "   ███", "    █"]},
+            {"name": "Knowledge Funnel", "color": "#4ecdc4", "art": ["███████████", " █████████", "  ███████", "   █████", "    ███", "     █", "    ███", "   █████"]},
+            {"name": "INT Flask", "color": "#c77dff", "art": ["    █", "   ███", "  █████", " ███ ███", " ███████", " ███ ███", "  █████"]},
+            {"name": "Mana Drop", "color": "#4cc9f0", "art": ["   ███", "  █████", " ███ ███", " ███████", " ███ ███", "  █████", "    █"]},
+            {"name": "Ruby Drop", "color": "#ef476f", "art": ["   ███", "  █████", " ███████", " ███ ███", " ███████", "  █████", "    █"]},
+            {"name": "Essence", "color": "#80ed99", "art": ["   ███", "  █████", " ███████", " ███ ███", "  █████", "   █ █", "    █"]},
+            {"name": "Funnel A", "color": "#ffd166", "art": ["███████████", " █████████", "  ███████", "   █████", "    ███", "    ███", "     █"]},
+            {"name": "Funnel B", "color": "#a8dadc", "art": ["████  ████", "██████████", " ████████", "  ██████", "   ████", "    ██", "    ██"]},
+            {"name": "Study Extractor", "color": "#f28482", "art": ["███████████", " █████████", "  ███████", "   █████", "    ███", "     █", "    ███", "    ███"]},
+            {"name": "Drop Flask", "color": "#5dade2", "art": ["    █", "   ███", "   ███", "  █████", " ███ ███", " ███████", "  █████"]},
+            {"name": "Book Stack", "color": "#84a59d", "art": [" ██████████", " ███  █████", " ██████████", " ███  █████", " ██████████", " ███  █████"]},
+            {"name": "Chip", "color": "#7bdff2", "art": ["  ████████", " ██ ████ ██", "████    ████", "████    ████", " ██ ████ ██", "  ████████"]},
+            {"name": "Sticky", "color": "#cdb4db", "art": [" █████████", " ██████████", " ███  █████", " ██████████", " ██████████", "  ████████"]},
+            {"name": "Folder", "color": "#f6bd60", "art": ["   ███████", " ███████████", "████  ██████", "████████████", "████████████", " ██████████"]},
+            {"name": "Diff", "color": "#90be6d", "art": ["  ████████", " ███  ████", "███████████", "███████████", " ████  ███", "  ████████"]},
+            {"name": "Terminal", "color": "#a8dadc", "art": [" ██████████", " █  ███████", " █ █  █████", " █   ██████", " ██████████", " ██████████"]},
+        ]
+
     def _content_for_result_tab(self, tab: str) -> str:
-        if tab == "setup":
-            return ""
+        if tab == "home":
+            return self.home_content
         if tab == "read":
             return self.read_content
         if tab == "inline":
@@ -1280,7 +1619,7 @@ class GitStudyApp(App):
 
     def _session_view_id_for_tab(self, tab: str) -> str:
         return {
-            "setup": "result-setup-view",
+            "home": "result-home-view",
             "read": "result-read-view",
             "quiz": "result-quiz-view",
             "inline": "result-inline-view",
@@ -1352,27 +1691,27 @@ class GitStudyApp(App):
         next_step.update(str(summary.get("recommended_next_step", "")).strip() or "-")
 
     def _set_result_tab(self, tab: str) -> None:
-        if tab not in {"setup", "read", "quiz", "inline", "review"}:
-            tab = "quiz"
+        if tab not in {"home", "read", "quiz", "inline", "review"}:
+            tab = "home"
         previous_tab = self.result_tab
         if previous_tab == "inline" and tab != "inline":
             self._persist_open_inline_quiz_state()
         self.result_tab = tab
         try:
-            setup_button = self.query_one("#result-tab-setup", Button)
+            home_button = self.query_one("#result-tab-home", Button)
             read_button = self.query_one("#result-tab-read", Button)
             quiz_button = self.query_one("#result-tab-quiz", Button)
             inline_button = self.query_one("#result-tab-inline", Button)
             review_button = self.query_one("#result-tab-review", Button)
             self._refresh_result_tab_labels()
-            setup_button.set_class(tab == "setup", "is-active")
+            home_button.set_class(tab == "home", "is-active")
             read_button.set_class(tab == "read", "is-active")
             quiz_button.set_class(tab == "quiz", "is-active")
             inline_button.set_class(tab == "inline", "is-active")
             review_button.set_class(tab == "review", "is-active")
         except Exception:
             pass
-        for candidate in {"setup", "read", "quiz", "inline", "review"}:
+        for candidate in {"home", "read", "quiz", "inline", "review"}:
             try:
                 self.query_one(f"#{self._session_view_id_for_tab(candidate)}", Vertical).display = (
                     candidate == tab
@@ -1382,7 +1721,7 @@ class GitStudyApp(App):
         if tab in {"read", "inline"}:
             self._update_tab_markdown(tab, self._content_for_result_tab(tab))
         elif tab == "review":
-            self._update_review_view(self._load_or_create_current_learning_session())
+            self._update_review_view(self._load_current_learning_session())
         self._refresh_result_command_row()
         self._refresh_quiz_workspace()
 
@@ -1439,15 +1778,25 @@ class GitStudyApp(App):
                 return True
         return False
 
+    def _current_inline_generation_in_progress(self) -> bool:
+        current_session_id = self._current_learning_session_id()
+        return bool(current_session_id and current_session_id in self._pending_inline_targets)
+
+    def _current_inline_grading_in_progress(self) -> bool:
+        current_session_id = self._current_learning_session_id()
+        return bool(
+            current_session_id and current_session_id in self._pending_inline_grade_targets
+        )
+
     def _current_inline_quiz_session(self) -> dict | None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             return None
         return session.get("inline_quiz")
 
     def _refresh_result_tab_labels(self) -> None:
         try:
-            setup_button = self.query_one("#result-tab-setup", Button)
+            home_button = self.query_one("#result-tab-home", Button)
             read_button = self.query_one("#result-tab-read", Button)
             quiz_button = self.query_one("#result-tab-quiz", Button)
             inline_button = self.query_one("#result-tab-inline", Button)
@@ -1455,17 +1804,32 @@ class GitStudyApp(App):
         except Exception:
             return
 
-        session = self._load_or_create_current_learning_session() if self.commits else None
-        if session is None:
-            setup_badge = read_badge = quiz_badge = inline_badge = review_badge = "_"
-        else:
-            setup_badge = "R"
+        generating_badge = self._generating_badge()
+        grading_badge = self._grading_badge()
+        read_badge = generating_badge if self._current_read_generation_in_progress() else "_"
+        quiz_badge = "_"
+        if self._current_quiz_generation_in_progress():
+            quiz_badge = generating_badge
+        elif self._current_general_quiz_grading_in_progress():
+            quiz_badge = grading_badge
+        inline_badge = "_"
+        if self._current_inline_generation_in_progress():
+            inline_badge = generating_badge
+        elif self._current_inline_grading_in_progress():
+            inline_badge = grading_badge
+        review_badge = "_"
+
+        session = self._load_current_learning_session() if self.commits else None
+        if session is not None:
             read_status = str(session.get("read", {}).get("status", "not_started"))
             quiz_status = str(session.get("general_quiz", {}).get("status", "not_started"))
             inline_status = str(session.get("inline_quiz", {}).get("status", "not_started"))
-            read_badge = self._status_badge(read_status)
-            quiz_badge = self._status_badge(quiz_status)
-            inline_badge = self._status_badge(inline_status)
+            if not self._current_read_generation_in_progress():
+                read_badge = self._status_badge(read_status)
+            if not self._current_quiz_generation_in_progress() and not self._current_general_quiz_grading_in_progress():
+                quiz_badge = self._status_badge(quiz_status)
+            if not self._current_inline_generation_in_progress() and not self._current_inline_grading_in_progress():
+                inline_badge = self._status_badge(inline_status)
             review_badge = (
                 "R"
                 if read_status == "completed"
@@ -1473,20 +1837,8 @@ class GitStudyApp(App):
                 and inline_status == "graded"
                 else "_"
             )
-            generating_badge = self._generating_badge()
-            grading_badge = self._grading_badge()
-            if self._read_generation_in_progress:
-                read_badge = generating_badge
-            if self._quiz_generation_in_progress:
-                quiz_badge = generating_badge
-            elif self._general_quiz_grading_in_progress:
-                quiz_badge = grading_badge
-            if self._inline_generation_in_progress():
-                inline_badge = generating_badge
-            elif self._inline_grading_in_progress():
-                inline_badge = grading_badge
 
-        setup_button.label = self._tab_label_text("Setup", setup_badge)
+        home_button.label = Text("Home")
         read_button.label = self._tab_label_text("Read", read_badge)
         quiz_button.label = self._tab_label_text("Basic", quiz_badge)
         inline_button.label = self._tab_label_text("Inline", inline_badge)
@@ -1495,11 +1847,12 @@ class GitStudyApp(App):
     def _refresh_result_command_row(self) -> None:
         try:
             command_row = self.query_one("#result-command-row", Horizontal)
-            generate_label = self.query_one("#result-generate-label", Static)
+            setup_button = self.query_one("#result-tab-setup", Button)
             read_button = self.query_one("#result-read", Button)
             quiz_button = self.query_one("#result-generate", Button)
             inline_button = self.query_one("#result-inline-open", Button)
             sessions_button = self.query_one("#result-sessions-open", Button)
+            generate_all_button = self.query_one("#result-session-generate-all", Button)
             read_done_button = self.query_one("#result-read-done-top", Button)
             quiz_retry_button = self.query_one("#result-quiz-retry-top", Button)
             quiz_grade_button = self.query_one("#result-quiz-grade-top", Button)
@@ -1508,12 +1861,14 @@ class GitStudyApp(App):
         except Exception:
             return
 
-        command_row.display = self.result_tab in {"setup", "read", "quiz", "inline", "review"}
-        generate_label.display = self.result_tab in {"setup", "read", "quiz", "inline"}
-        read_button.display = self.result_tab in {"setup", "read"}
-        quiz_button.display = self.result_tab in {"setup", "quiz"}
-        inline_button.display = self.result_tab in {"setup", "inline"}
-        sessions_button.display = self.result_tab == "setup"
+        command_row.display = self.result_tab in {"read", "quiz", "inline", "review"}
+        command_row.display = self.result_tab in {"home", "read", "quiz", "inline", "review"}
+        setup_button.display = True
+        generate_all_button.display = self.result_tab == "home"
+        read_button.display = self.result_tab == "read"
+        quiz_button.display = self.result_tab == "quiz"
+        inline_button.display = self.result_tab == "inline"
+        sessions_button.display = self.result_tab == "home"
         read_done_button.display = self.result_tab == "read"
         quiz_retry_button.display = self.result_tab == "quiz"
         quiz_grade_button.display = self.result_tab == "quiz"
@@ -1522,7 +1877,7 @@ class GitStudyApp(App):
 
         general_quiz = self._current_general_quiz_session() or {}
         inline_quiz = self._current_inline_quiz_session() or {}
-        session = self._load_or_create_current_learning_session() or {}
+        session = self._load_current_learning_session() or {}
         read_step = session.get("read", {})
         general_quiz_has_questions = bool(general_quiz.get("questions", []))
         inline_quiz_has_questions = bool(inline_quiz.get("questions", []))
@@ -1530,15 +1885,27 @@ class GitStudyApp(App):
         read_completed = str(read_step.get("status", "not_started")) == "completed"
         general_quiz_graded = str(general_quiz.get("status", "not_started")) == "graded"
         inline_quiz_graded = str(inline_quiz.get("status", "not_started")) == "graded"
-        quiz_busy = self._quiz_generation_in_progress or self._general_quiz_grading_in_progress
-        inline_busy = self._inline_generation_in_progress() or self._inline_grading_in_progress()
+        quiz_busy = (
+            self._current_quiz_generation_in_progress()
+            or self._current_general_quiz_grading_in_progress()
+        )
+        inline_busy = (
+            self._current_inline_generation_in_progress()
+            or self._current_inline_grading_in_progress()
+        )
 
-        read_button.disabled = self._read_generation_in_progress
-        quiz_button.disabled = self._quiz_generation_in_progress
+        setup_button.disabled = False
+        read_button.disabled = self._current_read_generation_in_progress()
+        quiz_button.disabled = self._current_quiz_generation_in_progress()
         inline_button.disabled = inline_busy
         sessions_button.disabled = False
+        generate_all_button.disabled = (
+            self._current_read_generation_in_progress()
+            or self._current_quiz_generation_in_progress()
+            or self._current_inline_generation_in_progress()
+        )
         read_done_button.disabled = (
-            self._read_generation_in_progress or not read_has_content or read_completed
+            self._current_read_generation_in_progress() or not read_has_content or read_completed
         )
         quiz_retry_button.disabled = quiz_busy or not general_quiz_has_questions
         quiz_grade_button.disabled = (
@@ -1553,7 +1920,7 @@ class GitStudyApp(App):
         repo_source = self._current_repo_source() if self.is_mounted else self.repo_source
         repo_label = "local" if repo_source == "local" else (self.github_repo_url or "github")
         selection = self._selected_range_summary() if self.commits else "no selection"
-        session = self._load_or_create_current_learning_session() if self.commits else None
+        session = self._load_current_learning_session() if self.commits else None
         session_status = (
             str(session.get("session_meta", {}).get("status", "idle"))
             if session is not None
@@ -1646,16 +2013,11 @@ class GitStudyApp(App):
                 with Vertical(id="result-panel"):
                     with Horizontal(id="result-header"):
                         yield Label("Session", id="result-header-title")
-                        yield Button(
-                            "Gen All",
-                            id="result-session-generate-all",
-                            classes="result-tool result-action",
-                        )
                         yield Static("", id="result-header-spacer")
                         with Horizontal(id="result-tab-group"):
                             yield Button(
-                                Text("Setup[_]"),
-                                id="result-tab-setup",
+                                Text("Home"),
+                                id="result-tab-home",
                                 classes="result-tool result-tab",
                             )
                             yield Static("|", classes="result-separator")
@@ -1684,19 +2046,28 @@ class GitStudyApp(App):
                             )
                     with Horizontal(id="result-command-row"):
                         with Horizontal(id="result-command-left"):
-                            yield Static("Generate:", classes="help-text", id="result-generate-label")
                             yield Button(
-                                "Read",
+                                "Setup ⧉",
+                                id="result-tab-setup",
+                                classes="result-tool result-action",
+                            )
+                            yield Button(
+                                "Gen All",
+                                id="result-session-generate-all",
+                                classes="result-tool result-action",
+                            )
+                            yield Button(
+                                "Gen Read",
                                 id="result-read",
                                 classes="result-tool result-action",
                             )
                             yield Button(
-                                "Basic Quiz",
+                                "Gen Basic",
                                 id="result-generate",
                                 classes="result-tool result-action",
                             )
                             yield Button(
-                                "Inline Quiz",
+                                "Gen Inline",
                                 id="result-inline-open",
                                 classes="result-tool result-action",
                             )
@@ -1733,17 +2104,10 @@ class GitStudyApp(App):
                                 classes="result-tool result-action",
                             )
                     with Vertical(id="result-body"):
-                        yield SessionSetupView(
-                            id="result-setup-view",
-                            saved_commit_mode=self.saved_commit_mode,
-                            saved_difficulty=self.saved_difficulty,
-                            saved_quiz_style=self.saved_quiz_style,
-                            saved_read_request=self.saved_read_request,
-                            saved_basic_request=self.saved_basic_request,
-                            saved_inline_request=self.saved_inline_request,
-                            saved_grading_request=self.saved_grading_request,
-                            request_placeholder=REQUEST_PLACEHOLDER,
-                            request_example_text=REQUEST_EXAMPLE_TEXT,
+                        yield SessionHomeView(
+                            self.home_content,
+                            samples=self.home_logo_samples,
+                            id="result-home-view",
                         )
                         yield SessionMarkdownView(
                             self.read_content,
@@ -2043,10 +2407,14 @@ class GitStudyApp(App):
         detail_view.update(self._commit_detail_text(index))
 
     def _current_commit_mode(self) -> str:
-        pressed = self.query_one("#commit-mode", RadioSet).pressed_button
-        if pressed is None:
-            return "auto"
-        return pressed.id.removeprefix("mode-")
+        if self.is_mounted:
+            try:
+                pressed = self.query_one("#commit-mode", RadioSet).pressed_button
+            except Exception:
+                pressed = None
+            if pressed is not None:
+                return pressed.id.removeprefix("mode-")
+        return self.saved_commit_mode or "auto"
 
     def _current_repo_source(self) -> str:
         pressed = self.query_one("#repo-source", RadioSet).pressed_button
@@ -2217,6 +2585,43 @@ class GitStudyApp(App):
             return ""
         return make_session_id(selected_shas)
 
+    def _session_id_from_target(self, target: dict[str, object] | None) -> str:
+        if target is None:
+            return ""
+        return str(target.get("session_id", "")).strip()
+
+    def _target_matches_current_selection(
+        self, target: dict[str, object] | None
+    ) -> bool:
+        target_session_id = self._session_id_from_target(target)
+        current_session_id = self._current_learning_session_id()
+        return bool(target_session_id and current_session_id and target_session_id == current_session_id)
+
+    def _current_quiz_generation_in_progress(self) -> bool:
+        current_session_id = self._current_learning_session_id()
+        return bool(current_session_id and current_session_id in self._pending_quiz_targets)
+
+    def _current_quiz_progress_label(self) -> str:
+        current_session_id = self._current_learning_session_id()
+        if not current_session_id:
+            return ""
+        return self._quiz_progress_labels.get(current_session_id, "")
+
+    def _current_quiz_error_message(self) -> str:
+        current_session_id = self._current_learning_session_id()
+        if not current_session_id:
+            return ""
+        return self._quiz_error_messages.get(current_session_id, "")
+
+    def _current_read_generation_in_progress(self) -> bool:
+        current_session_id = self._current_learning_session_id()
+        return bool(current_session_id and current_session_id in self._pending_read_targets)
+
+    def _current_general_quiz_grading_in_progress(self) -> bool:
+        return self._general_quiz_grading_in_progress and self._target_matches_current_selection(
+            self._pending_general_quiz_grade_target
+        )
+
     def _current_learning_session_selection(self) -> dict | None:
         selected_shas = self._current_session_selected_shas()
         if not selected_shas:
@@ -2233,31 +2638,12 @@ class GitStudyApp(App):
         }
 
     def _load_or_create_current_learning_session(self) -> dict | None:
-        session_id = self._current_learning_session_id()
-        selection = self._current_learning_session_selection()
-        local_repo_root = self._current_local_repo_root()
-        if not session_id or selection is None:
-            return None
         return self._load_or_create_learning_session_for_target(
-            {
-                "session_id": session_id,
-                "selection": selection,
-                "repo_source": self._current_repo_source(),
-                "github_repo_url": self.github_repo_url,
-                "local_repo_root": (
-                    str(local_repo_root) if local_repo_root is not None else None
-                ),
-                "preferences": {
-                    "difficulty": self._current_difficulty(),
-                    "quiz_style": self._current_quiz_style(),
-                    "request_text": self._current_request("basic"),
-                    "read_request_text": self._current_request("read"),
-                    "basic_request_text": self._current_request("basic"),
-                    "inline_request_text": self._current_request("inline"),
-                    "grading_request_text": self._current_request("grading"),
-                },
-            }
+            self._capture_session_target()
         )
+
+    def _load_current_learning_session(self) -> dict | None:
+        return self._load_learning_session_for_target(self._capture_session_target())
 
     def _capture_session_target(self) -> dict[str, object] | None:
         session_id = self._current_learning_session_id()
@@ -2352,8 +2738,27 @@ class GitStudyApp(App):
             now=now_timestamp(),
         )
 
+    def _load_learning_session_for_target(
+        self,
+        target: dict[str, object] | None,
+    ) -> dict | None:
+        if target is None:
+            return None
+        session_id = str(target.get("session_id", "")).strip()
+        repo_source = str(target.get("repo_source", "local"))
+        github_repo_url = str(target.get("github_repo_url", ""))
+        local_repo_root = target.get("local_repo_root")
+        if not session_id:
+            return None
+        return load_learning_session(
+            session_id,
+            repo_source=repo_source,
+            github_repo_url=github_repo_url,
+            local_repo_root=str(local_repo_root) if local_repo_root is not None else None,
+        )
+
     def _inline_saved_state_for_current_selection(self) -> InlineQuizSavedState | None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             return None
         inline_quiz = session.get("inline_quiz", {})
@@ -2448,11 +2853,17 @@ class GitStudyApp(App):
             if not inline_quiz.questions:
                 continue
             inline_quiz._save_current_answer()
-            self._save_inline_quiz_state_for_selection(inline_quiz.get_saved_state())
+            target = self._inline_session_targets.get(inline_quiz.cache_key)
+            if target is None:
+                return
+            self._save_inline_quiz_state_for_selection(
+                inline_quiz.get_saved_state(),
+                target=target,
+            )
             return
 
     def _rebuild_inline_content_for_current_selection(self) -> None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             self.inline_content = "인라인 퀴즈가 아직 없습니다."
             if self.result_tab == "inline":
@@ -2514,7 +2925,7 @@ class GitStudyApp(App):
             self._set_tab_result("inline", self.inline_content, store=False)
 
     def _current_general_quiz_session(self) -> dict | None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             return None
         return session.get("general_quiz")
@@ -2603,9 +3014,10 @@ class GitStudyApp(App):
         if not questions:
             self._set_status("채점할 일반 퀴즈가 없습니다.")
             return
+        target = self._capture_session_target()
         self._general_quiz_grading_in_progress = True
         self._badge_animation_frame = 0
-        self._pending_general_quiz_grade_target = self._capture_session_target()
+        self._pending_general_quiz_grade_target = target
         self.query_one("#result-quiz-grade", Button).disabled = True
         self.query_one("#result-quiz-grade-top", Button).disabled = True
         self.query_one("#result-quiz-retry", Button).disabled = True
@@ -2617,6 +3029,7 @@ class GitStudyApp(App):
             questions,
             answers,
             user_request=self._current_request("grading"),
+            target=target,
         )
 
     def _retry_inline_quiz_for_selection(self) -> None:
@@ -2631,7 +3044,43 @@ class GitStudyApp(App):
             github_repo_url=self.github_repo_url,
             local_repo_root=str(local_repo_root) if local_repo_root is not None else None,
         )
-        self._restore_inline_widget_for_selection(widget_id="result-inline-widget")
+        inline_quiz = self.query_one("#result-inline-widget", InlineQuizWidget)
+        if self.commits:
+            selected_indices = sorted(self._selected_commit_indices())
+            newest_index = min(selected_indices) if selected_indices else self.selected_commit_index
+            if newest_index < len(self.commits):
+                target_sha = self.commits[newest_index]["sha"]
+                session_id = self._current_learning_session_id() or target_sha
+                repo = get_repo(**self._repo_args(refresh_remote=False))
+                selected_commit = repo.commit(target_sha)
+                commit_context = build_commit_context(selected_commit, "selected_commit", repo)
+                saved_state = self._inline_saved_state_for_current_selection()
+                if saved_state is not None and saved_state["questions"]:
+                    target = self._capture_session_target()
+                    if target is not None:
+                        self._inline_session_targets[session_id] = target
+                    inline_quiz.show_quiz(
+                        commit_context=commit_context,
+                        repo=repo,
+                        target_commit_sha=target_sha,
+                        title_suffix=self._selected_commit_title_suffix(),
+                        saved_state=saved_state,
+                        cache_key=session_id,
+                        user_request=self._current_request("inline"),
+                        grading_request=self._current_request("grading"),
+                    )
+                elif not commit_context.get("diff_text"):
+                    inline_quiz.show_placeholder(
+                        "텍스트 diff가 있는 커밋을 선택하면 인라인 퀴즈를 생성할 수 있습니다."
+                    )
+                else:
+                    inline_quiz.show_placeholder(
+                        "`Inline Quiz` 버튼을 누르면 여기서 인라인 퀴즈를 생성할 수 있습니다."
+                    )
+            else:
+                inline_quiz.show_placeholder("표시할 커밋이 없습니다.")
+        else:
+            inline_quiz.show_placeholder("표시할 커밋이 없습니다.")
         self._rebuild_inline_content_for_current_selection()
         self._rebuild_review_content_for_current_selection()
         self._set_result_tab("inline")
@@ -2649,6 +3098,8 @@ class GitStudyApp(App):
         self._badge_animation_frame = 0
         inline_quiz._save_current_answer()
         self._save_inline_quiz_state_for_selection(inline_quiz.get_saved_state())
+        if inline_quiz.cache_key:
+            self.notify_inline_grade_started(inline_quiz.cache_key)
         inline_quiz.handle_grade()
 
     def _persist_general_quiz_workspace_answer(self) -> None:
@@ -2692,6 +3143,35 @@ class GitStudyApp(App):
         )
         self._refresh_quiz_workspace()
 
+    def _rebuild_result_quiz_nav(
+        self,
+        questions: list[dict],
+        current_index: int,
+        answers: dict[str, str],
+    ) -> None:
+        try:
+            nav = self.query_one("#result-quiz-nav", Horizontal)
+        except Exception:
+            return
+        nav.remove_children()
+        self._result_quiz_nav_build_serial += 1
+        for index, question in enumerate(questions):
+            answered = bool(str(answers.get(str(question.get("id", "")), "")).strip())
+            classes = "result-quiz-nav-btn"
+            if index == current_index:
+                classes += " -active"
+            elif answered:
+                classes += " -answered"
+            nav.mount(
+                Button(
+                    f"{index + 1}✓" if answered else str(index + 1),
+                    id=f"result-quiz-nav-{self._result_quiz_nav_build_serial}-{index}",
+                    classes=classes,
+                    compact=True,
+                    flat=True,
+                )
+            )
+
     def _refresh_quiz_workspace(self) -> None:
         try:
             quiz_workspace = self.query_one("#result-quiz-view", Vertical)
@@ -2703,17 +3183,21 @@ class GitStudyApp(App):
         show_workspace = self.result_tab == "quiz"
         quiz_workspace.display = show_workspace
         if show_workspace:
-            if self._quiz_generation_in_progress:
+            if self._current_quiz_generation_in_progress():
                 quiz_dots = "+" * max(1, ((self._quiz_animation_frame - 1) % 3) + 1)
+                current_progress_label = self._current_quiz_progress_label()
+                progress_widget = self.query_one("#result-quiz-progress", Static)
                 self.query_one("#result-quiz-meta", Label).update("일반 퀴즈 생성 중")
-                self.query_one("#result-quiz-progress", Static).update(
-                    f"[{self._quiz_progress_label}]{quiz_dots}"
-                    if self._quiz_progress_label
+                progress_widget.update(
+                    f"[{current_progress_label}]{quiz_dots}"
+                    if current_progress_label
                     else quiz_dots
                 )
+                progress_widget.display = True
                 self.query_one("#result-quiz-question", Static).update(
                     "선택한 커밋 범위를 기준으로 일반 퀴즈를 만들고 있습니다."
                 )
+                self._rebuild_result_quiz_nav([], 0, {})
                 answer_input = self.query_one("#result-quiz-answer", TextArea)
                 answer_input.text = ""
                 answer_input.disabled = True
@@ -2726,12 +3210,15 @@ class GitStudyApp(App):
                 self.query_one("#result-quiz-retry", Button).disabled = True
                 self.query_one("#result-quiz-grade", Button).disabled = True
                 return
-            self.query_one("#result-quiz-progress", Static).update("")
+            progress_widget = self.query_one("#result-quiz-progress", Static)
+            progress_widget.update("")
+            progress_widget.display = False
+            current_error_message = self._current_quiz_error_message()
             if not questions:
-                if self._quiz_generation_error_message:
+                if current_error_message:
                     self.query_one("#result-quiz-meta", Label).update("일반 퀴즈 생성 오류")
                     self.query_one("#result-quiz-question", Static).update(
-                        self._quiz_generation_error_message
+                        current_error_message
                     )
                 else:
                     self.query_one("#result-quiz-meta", Label).update(
@@ -2740,12 +3227,13 @@ class GitStudyApp(App):
                     self.query_one("#result-quiz-question", Static).update(
                         "Generate Quiz를 누르면 일반 퀴즈를 만들고, 여기서 답변과 채점을 진행할 수 있습니다."
                     )
+                self._rebuild_result_quiz_nav([], 0, {})
                 answer_input = self.query_one("#result-quiz-answer", TextArea)
                 answer_input.text = ""
                 answer_input.disabled = True
                 self.query_one("#result-quiz-feedback", Static).update("")
                 self.query_one("#result-quiz-status", Static).update(
-                    "status=error" if self._quiz_generation_error_message else "status=empty"
+                    "status=error" if current_error_message else "status=empty"
                 )
                 self.query_one("#result-quiz-prev", Button).disabled = True
                 self.query_one("#result-quiz-next", Button).disabled = True
@@ -2756,16 +3244,14 @@ class GitStudyApp(App):
             current_question = questions[current_index]
             answers = dict(general_quiz.get("attempt", {}).get("answers", {}))
             general_quiz_graded = str(general_quiz.get("status", "not_started")) == "graded"
-            answered_count = sum(1 for value in answers.values() if str(value).strip())
-            score_summary = general_quiz.get("attempt", {}).get("score_summary")
-            self.query_one("#result-quiz-meta", Label).update(
-                (
-                    f"[{current_index + 1}/{len(questions)}]  answered {answered_count}/{len(questions)}"
-                    f"  |  total {score_summary.get('total', 0)}/{score_summary.get('max', 100)}"
-                    if score_summary
-                    else f"[{current_index + 1}/{len(questions)}]  answered {answered_count}/{len(questions)}"
-                )
+            type_label = self._review_type_label(
+                str(current_question.get("question_type", "intent"))
             )
+            self.query_one("#result-quiz-meta", Label).update(
+                f"[{current_index + 1}/{len(questions)}]  {type_label}"
+            )
+            progress_widget.update("")
+            progress_widget.display = False
             self.query_one("#result-quiz-question", Static).update(
                 "\n".join(
                     [
@@ -2783,32 +3269,24 @@ class GitStudyApp(App):
             self._restoring_general_quiz_answer = True
             answer_input.text = str(answers.get(current_question.get("id", ""), ""))
             self._restoring_general_quiz_answer = False
-            answer_input.disabled = False
+            answer_input.disabled = general_quiz_graded
+            self._rebuild_result_quiz_nav(questions, current_index, answers)
             grades = {
                 str(grade.get("id", "")): grade
                 for grade in general_quiz.get("attempt", {}).get("grades", [])
             }
             current_grade = grades.get(str(current_question.get("id", "")))
-            self.query_one("#result-quiz-status", Static).update(
-                (
-                    f"type={current_question.get('question_type', 'intent')}  |  "
-                    f"score={current_grade.get('score', 0)}"
-                    if current_grade is not None
-                    else (
-                        f"type={current_question.get('question_type', 'intent')}  |  "
-                        f"total={score_summary.get('total', 0)}/{score_summary.get('max', 100)}"
-                        if score_summary
-                        else f"type={current_question.get('question_type', 'intent')}"
-                    )
-                )
-            )
             feedback = str(current_grade.get("feedback", "")).strip() if current_grade else ""
             self.query_one("#result-quiz-feedback", Static).update(
-                (
-                    f"채점 결과\n\n점수: {current_grade.get('score', 0)}/100\n\n{feedback}"
-                    if current_grade is not None
-                    else "답변을 작성한 뒤 Grade로 채점할 수 있습니다."
+                self._quiz_feedback_renderable(
+                    current_index=current_index,
+                    total_questions=len(questions),
+                    type_label=type_label,
+                    score=int(current_grade.get("score", 0)),
+                    feedback=feedback,
                 )
+                if current_grade is not None
+                else "답변을 작성한 뒤 Grade로 채점할 수 있습니다."
             )
             self.query_one("#result-quiz-prev", Button).disabled = current_index <= 0
             self.query_one("#result-quiz-next", Button).disabled = (
@@ -2823,7 +3301,6 @@ class GitStudyApp(App):
                 self.query_one("#result-quiz-feedback", Static).update(
                     "현재 답변을 채점 중입니다. 잠시만 기다려 주세요."
                 )
-                self.query_one("#result-quiz-status", Static).update("status=grading")
             return
 
     def _save_general_quiz_result_for_selection(
@@ -2890,12 +3367,13 @@ class GitStudyApp(App):
         self._refresh_top_bar_context()
 
     def _restore_learning_content_for_current_selection(self) -> None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             self.read_content = self._default_result_text()
             self.quiz_content = self._default_result_text()
             self.inline_content = "인라인 퀴즈가 아직 없습니다."
             self._rebuild_review_content_for_current_selection()
+            self._set_result_tab(self.result_tab)
             self._refresh_session_progress()
             self._refresh_top_bar_context()
             return
@@ -2951,16 +3429,24 @@ class GitStudyApp(App):
         self.load_repo_commits(self._repo_args(), announce, self._current_repo_key())
 
     def _current_difficulty(self) -> str:
-        pressed = self.query_one("#difficulty", RadioSet).pressed_button
-        if pressed is None:
-            return "medium"
-        return pressed.id.removeprefix("difficulty-").lower()
+        if self.is_mounted:
+            try:
+                pressed = self.query_one("#difficulty", RadioSet).pressed_button
+            except Exception:
+                pressed = None
+            if pressed is not None:
+                return pressed.id.removeprefix("difficulty-").lower()
+        return self.saved_difficulty or "medium"
 
     def _current_quiz_style(self) -> str:
-        pressed = self.query_one("#quiz-style", RadioSet).pressed_button
-        if pressed is None:
-            return "mixed"
-        return pressed.id.removeprefix("style-")
+        if self.is_mounted:
+            try:
+                pressed = self.query_one("#quiz-style", RadioSet).pressed_button
+            except Exception:
+                pressed = None
+            if pressed is not None:
+                return pressed.id.removeprefix("style-")
+        return self.saved_quiz_style or "mixed"
 
     def _saved_request_value(self, kind: str) -> str:
         return {
@@ -2987,14 +3473,16 @@ class GitStudyApp(App):
         return REQUEST_EXAMPLE_TEXT.removeprefix("예시 - ").strip()
 
     def _current_request(self, kind: str, *, use_fallback: bool = True) -> str:
-        text = ""
+        text = self._saved_request_value(kind).strip()
         if self.is_mounted:
             try:
-                text = self.query_one(self._request_input_selector(kind), TextArea).text.strip()
+                current_text = self.query_one(
+                    self._request_input_selector(kind), TextArea
+                ).text.strip()
             except Exception:
-                text = ""
-        else:
-            text = self._saved_request_value(kind).strip()
+                current_text = ""
+            if current_text:
+                text = current_text
         if text:
             return text
         return self._request_fallback_text() if use_fallback else ""
@@ -3112,7 +3600,7 @@ class GitStudyApp(App):
         if tab in {"read", "inline"}:
             self._update_tab_markdown(tab, content)
         elif tab == "review":
-            self._update_review_view(self._load_or_create_current_learning_session())
+            self._update_review_view(self._load_current_learning_session())
         elif tab == "quiz" and self.result_tab == "quiz":
             self._refresh_quiz_workspace()
 
@@ -3132,6 +3620,37 @@ class GitStudyApp(App):
             "tradeoff": "트레이드오프",
             "vulnerability": "취약점/위험",
         }.get(question_type, question_type or "기타")
+
+    def _score_gauge_text(self, score: int) -> str:
+        clamped = max(0, min(100, int(score)))
+        filled = clamped // 10
+        return ("█" * filled) + ("░" * (10 - filled))
+
+    def _score_feedback_renderable(self, score: int, feedback: str) -> Text:
+        result = Text()
+        result.append(self._score_gauge_text(score), style="green")
+        result.append(f"  {score}점\n\n", style="bold yellow")
+        result.append(feedback or "-")
+        return result
+
+    def _quiz_feedback_renderable(
+        self,
+        *,
+        current_index: int,
+        total_questions: int,
+        type_label: str,
+        score: int,
+        feedback: str,
+    ) -> Text:
+        result = Text()
+        result.append(
+            f"채점 결과  [{current_index + 1}/{total_questions}]  {type_label}\n\n",
+            style="bold bright_yellow",
+        )
+        result.append(self._score_gauge_text(score), style="green")
+        result.append(f"  {score}점\n\n", style="bold yellow")
+        result.append(feedback or "-")
+        return result
 
     def _review_question_hint(self, question: dict) -> str:
         raw = str(question.get("question", "")).strip()
@@ -3284,7 +3803,7 @@ class GitStudyApp(App):
         return session
 
     def _rebuild_review_content_for_current_selection(self) -> None:
-        session = self._load_or_create_current_learning_session()
+        session = self._load_current_learning_session()
         if session is None:
             self.review_content = "리뷰 결과가 아직 없습니다."
             self._update_review_view(None)
@@ -3472,18 +3991,20 @@ class GitStudyApp(App):
         )
 
     def _current_generation_status_text(self) -> str | None:
-        if self._active_generation_status_source == "quiz" and self._quiz_generation_in_progress:
-            return self._quiz_status_base
-        if self._active_generation_status_source == "read" and self._read_generation_in_progress:
+        if self._active_generation_status_source == "quiz" and self._current_quiz_generation_in_progress():
+            label = self._current_quiz_progress_label()
+            return f"퀴즈 생성 중 [{label}]" if label else "퀴즈 생성 중"
+        if self._active_generation_status_source == "read" and self._current_read_generation_in_progress():
             return self._read_status_base
-        if self._quiz_generation_in_progress:
-            return self._quiz_status_base
-        if self._read_generation_in_progress:
+        if self._current_quiz_generation_in_progress():
+            label = self._current_quiz_progress_label()
+            return f"퀴즈 생성 중 [{label}]" if label else "퀴즈 생성 중"
+        if self._current_read_generation_in_progress():
             return self._read_status_base
         return None
 
     def _start_status_animation(self) -> None:
-        self._quiz_generation_in_progress = True
+        self._quiz_generation_in_progress = bool(self._pending_quiz_targets)
         self._quiz_animation_frame = 0
         self._badge_animation_frame = 0
         self._quiz_status_base = "퀴즈 생성 중"
@@ -3495,7 +4016,7 @@ class GitStudyApp(App):
         self._refresh_quiz_workspace()
 
     def _stop_quiz_status_animation(self) -> None:
-        self._quiz_generation_in_progress = False
+        self._quiz_generation_in_progress = bool(self._pending_quiz_targets)
         self._quiz_progress_label = ""
         self._quiz_status_base = "퀴즈 생성 중"
         if self._active_generation_status_source == "quiz":
@@ -3506,15 +4027,24 @@ class GitStudyApp(App):
         self._refresh_result_command_row()
         self._refresh_quiz_workspace()
 
-    def _set_quiz_progress_node(self, label: str) -> None:
-        self._quiz_progress_label = label
-        self._quiz_status_base = f"퀴즈 생성 중 [{label}]"
+    def _set_quiz_progress_node(
+        self,
+        label: str,
+        *,
+        target: dict[str, object] | None = None,
+    ) -> None:
+        session_id = self._session_id_from_target(target) if target is not None else ""
+        if session_id:
+            self._quiz_progress_labels[session_id] = label
+        if self._target_matches_current_selection(target):
+            self._quiz_progress_label = label
+            self._quiz_status_base = f"퀴즈 생성 중 [{label}]"
         if self._quiz_generation_in_progress:
             self._animate_status()
         self._refresh_quiz_workspace()
 
     def _start_read_status_animation(self) -> None:
-        self._read_generation_in_progress = True
+        self._read_generation_in_progress = bool(self._pending_read_targets)
         self._read_animation_frame = 0
         self._badge_animation_frame = 0
         self._read_status_base = "읽을거리 생성 중"
@@ -3531,7 +4061,7 @@ class GitStudyApp(App):
             self._animate_status()
 
     def _stop_read_status_animation(self) -> None:
-        self._read_generation_in_progress = False
+        self._read_generation_in_progress = bool(self._pending_read_targets)
         self._read_progress_label = ""
         self._read_status_base = "읽을거리 생성 중"
         if self._active_generation_status_source == "read":
@@ -3563,7 +4093,8 @@ class GitStudyApp(App):
             read_dots = "+" * ((self._read_animation_frame % 3) + 1)
             read_text = f"{self._read_status_base}{read_dots}"
             self._read_animation_frame += 1
-            self._set_tab_result("read", self._read_progress_markdown(read_text))
+            if self._current_read_generation_in_progress():
+                self._set_tab_result("read", self._read_progress_markdown(read_text))
         if (
             self._quiz_generation_in_progress
             or self._read_generation_in_progress
@@ -3719,22 +4250,9 @@ class GitStudyApp(App):
             self._focusable_widget("#repo-source", RadioSet),
             self._focusable_widget("#commit-list", ListView),
             self._active_result_tab_button(),
+            self._focusable_widget("#result-tab-setup", Button),
+            self._first_visible_command_button(),
         ]
-        if self.result_tab == "setup":
-            widgets.extend(
-                [
-                    self._first_visible_command_button(),
-                    self._focusable_widget("#commit-mode", RadioSet),
-                    self._focusable_widget("#difficulty", RadioSet),
-                    self._focusable_widget("#quiz-style", RadioSet),
-                    self._focusable_widget("#request-read-input", TextArea),
-                    self._focusable_widget("#request-basic-input", TextArea),
-                    self._focusable_widget("#request-inline-input", TextArea),
-                    self._focusable_widget("#request-grading-input", TextArea),
-                ]
-            )
-        else:
-            widgets.append(self._first_visible_command_button())
         widgets.append(self._focusable_widget("#api-key-open", Button))
 
         for widget in widgets:
@@ -3765,6 +4283,7 @@ class GitStudyApp(App):
 
     def _first_visible_command_button(self) -> Button | None:
         for selector in [
+            "#result-tab-setup",
             "#result-read",
             "#result-generate",
             "#result-inline-open",
@@ -3844,38 +4363,7 @@ class GitStudyApp(App):
         return buttons
 
     def _move_focus_in_setup_horizontal(self, direction: int) -> bool:
-        if self.result_tab != "setup":
-            return False
-
-        groups = self._setup_radio_group_definitions()
-        focused = self.focused
-        if focused is None:
-            return False
-
-        current_index = None
-        for index, (_, button_selectors) in enumerate(groups):
-            for button_selector in button_selectors:
-                button = self._focusable_widget(button_selector, RadioButton)
-                if button is None:
-                    continue
-                if focused is button or button in focused.ancestors or focused in button.ancestors:
-                    current_index = index
-                    break
-            if current_index is not None:
-                break
-        if current_index is None:
-            return False
-
-        next_index = current_index + direction
-        if next_index < 0 or next_index >= len(groups):
-            return False
-        next_selector, next_buttons = groups[next_index]
-        target_selector = next_buttons[0] if direction > 0 else next_buttons[-1]
-        next_widget = self._focusable_widget(target_selector, RadioButton)
-        if not isinstance(next_widget, RadioButton):
-            return False
-        next_widget.focus()
-        return True
+        return False
 
     def _selected_repo_focus_slot(self) -> int:
         repo_source = self._focusable_widget("#repo-source", RadioSet)
@@ -4048,45 +4536,7 @@ class GitStudyApp(App):
         return focused is result_command_row or result_command_row in focused.ancestors
 
     def _move_focus_in_setup_vertical(self, direction: int) -> bool:
-        if self.result_tab != "setup":
-            return False
-
-        if direction > 0 and self._focused_in_result_command_row():
-            first_button = self._focusable_widget("#mode-auto", RadioButton)
-            if isinstance(first_button, RadioButton):
-                first_button.focus()
-                return True
-            return False
-
-        focused = self.focused
-        if focused is None:
-            return False
-
-        items: list[Widget] = []
-        command_button = self._first_visible_command_button()
-        if command_button is not None:
-            items.append(command_button)
-        items.extend(self._setup_radio_buttons())
-        for selector in self._request_input_selectors():
-            request_input = self._focusable_widget(selector, TextArea)
-            if request_input is not None:
-                items.append(request_input)
-        if len(items) < 2:
-            return False
-
-        current_index = None
-        for index, item in enumerate(items):
-            if focused is item or item in focused.ancestors or focused in item.ancestors:
-                current_index = index
-                break
-        if current_index is None:
-            return False
-
-        next_index = current_index + direction
-        if next_index < 0 or next_index >= len(items):
-            return False
-        items[next_index].focus()
-        return True
+        return False
 
     def action_focus_next_section(self) -> None:
         chain = self._focus_chain()
@@ -4199,7 +4649,7 @@ class GitStudyApp(App):
                 return
             if self._move_focus_in_button_group(
                 [
-                    "#result-tab-setup",
+                    "#result-tab-home",
                     "#result-tab-read",
                     "#result-tab-quiz",
                     "#result-tab-inline",
@@ -4211,6 +4661,8 @@ class GitStudyApp(App):
                 return
             if self._move_focus_in_button_group(
                 [
+                    "#result-tab-setup",
+                    "#result-session-generate-all",
                     "#result-read",
                     "#result-generate",
                     "#result-inline-open",
@@ -4286,8 +4738,8 @@ class GitStudyApp(App):
                 return
             if focused is self.query_one("#result-inline-open", Button):
                 event.stop()
-                self.action_open_inline_quiz()
-                self._set_result_tab("inline")
+                self._show_inline_quiz(widget_id="result-inline-widget", force_regenerate=True)
+                self._rebuild_inline_content_for_current_selection()
                 return
             if focused is self.query_one("#result-quiz-retry-top", Button):
                 event.stop()
@@ -4307,7 +4759,11 @@ class GitStudyApp(App):
                 return
             if focused is self.query_one("#result-tab-setup", Button):
                 event.stop()
-                self._set_result_tab("setup")
+                self.action_open_setup()
+                return
+            if focused is self.query_one("#result-tab-home", Button):
+                event.stop()
+                self._set_result_tab("home")
                 return
             if focused is self.query_one("#result-tab-read", Button):
                 event.stop()
@@ -4364,7 +4820,6 @@ class GitStudyApp(App):
 
     @on(Button.Pressed, "#result-read")
     def handle_generate_read(self) -> None:
-        self._set_result_tab("read")
         self.action_generate_read()
 
     @on(Button.Pressed, "#result-read-done-top")
@@ -4381,14 +4836,12 @@ class GitStudyApp(App):
 
     @on(Button.Pressed, "#result-generate")
     def handle_generate(self) -> None:
-        self._set_result_tab("quiz")
         self.action_generate_quiz()
 
     @on(Button.Pressed, "#result-inline-open")
     def handle_result_inline_open(self) -> None:
         self._show_inline_quiz(widget_id="result-inline-widget", force_regenerate=True)
         self._rebuild_inline_content_for_current_selection()
-        self._set_result_tab("inline")
 
     @on(Button.Pressed, "#result-mode-markdown")
     def handle_result_mode_markdown(self) -> None:
@@ -4412,7 +4865,11 @@ class GitStudyApp(App):
 
     @on(Button.Pressed, "#result-tab-setup")
     def handle_result_tab_setup(self) -> None:
-        self._set_result_tab("setup")
+        self.action_open_setup()
+
+    @on(Button.Pressed, "#result-tab-home")
+    def handle_result_tab_home(self) -> None:
+        self._set_result_tab("home")
 
     @on(Button.Pressed, "#result-tab-read")
     def handle_result_tab_read(self) -> None:
@@ -4440,6 +4897,37 @@ class GitStudyApp(App):
     @on(Button.Pressed, "#result-quiz-next")
     def handle_result_quiz_next(self) -> None:
         self._navigate_general_quiz_question(1)
+
+    @on(Button.Pressed)
+    def handle_result_quiz_nav_button(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if not button_id.startswith("result-quiz-nav-"):
+            return
+        try:
+            index = int(button_id.rsplit("-", 1)[-1])
+        except ValueError:
+            return
+        self._persist_general_quiz_workspace_answer()
+        general_quiz = self._current_general_quiz_session()
+        if not general_quiz:
+            return
+        questions = list(general_quiz.get("questions", []))
+        if not questions or not (0 <= index < len(questions)):
+            return
+        session = self._load_or_create_current_learning_session()
+        local_repo_root = self._current_local_repo_root()
+        if session is None:
+            return
+        session["general_quiz"]["current_index"] = index
+        session["general_quiz"]["updated_at"] = now_timestamp()
+        save_learning_session(
+            session,
+            repo_source=self._current_repo_source(),
+            github_repo_url=self.github_repo_url,
+            local_repo_root=str(local_repo_root) if local_repo_root is not None else None,
+        )
+        self._refresh_quiz_workspace()
+        event.stop()
 
     @on(Button.Pressed, "#result-quiz-retry")
     def handle_result_quiz_retry(self) -> None:
@@ -4470,6 +4958,38 @@ class GitStudyApp(App):
         if self._restoring_general_quiz_answer:
             return
         self._persist_general_quiz_workspace_answer()
+
+    @on(AnswerTextArea.Submit)
+    def handle_result_quiz_answer_submit(self, message: AnswerTextArea.Submit) -> None:
+        if message.answer_input is not self.query_one("#result-quiz-answer", AnswerTextArea):
+            return
+        self._persist_general_quiz_workspace_answer()
+        self._refresh_quiz_workspace()
+
+    @on(AnswerTextArea.NavigatePrevious)
+    def handle_result_quiz_answer_previous(
+        self, message: AnswerTextArea.NavigatePrevious
+    ) -> None:
+        if message.answer_input is not self.query_one("#result-quiz-answer", AnswerTextArea):
+            return
+        self._persist_general_quiz_workspace_answer()
+        self._navigate_general_quiz_question(-1)
+
+    @on(AnswerTextArea.NavigateNext)
+    def handle_result_quiz_answer_next(
+        self, message: AnswerTextArea.NavigateNext
+    ) -> None:
+        if message.answer_input is not self.query_one("#result-quiz-answer", AnswerTextArea):
+            return
+        self._persist_general_quiz_workspace_answer()
+        general_quiz = self._current_general_quiz_session()
+        questions = list(general_quiz.get("questions", [])) if general_quiz else []
+        current_index = int(general_quiz.get("current_index", 0)) if general_quiz else 0
+        if questions and current_index >= len(questions) - 1:
+            self._grade_general_quiz_for_selection()
+        else:
+            self._navigate_general_quiz_question(1)
+
 
     @on(Button.Pressed, "#top-code-open")
     def handle_top_code_open(self) -> None:
@@ -4557,6 +5077,29 @@ class GitStudyApp(App):
             self._handle_session_list_screen_closed,
         )
 
+    def action_open_setup(self) -> None:
+        self.push_screen(
+            SetupScreen(
+                saved_commit_mode=self.saved_commit_mode,
+                saved_difficulty=self.saved_difficulty,
+                saved_quiz_style=self.saved_quiz_style,
+                saved_read_request=self.saved_read_request,
+                saved_basic_request=self.saved_basic_request,
+                saved_inline_request=self.saved_inline_request,
+                saved_grading_request=self.saved_grading_request,
+                request_placeholder=REQUEST_PLACEHOLDER,
+                request_example_text=REQUEST_EXAMPLE_TEXT,
+            ),
+            self._handle_setup_screen_closed,
+        )
+
+    def _handle_setup_screen_closed(
+        self, result: dict[str, str] | None
+    ) -> None:
+        self._save_app_state()
+        if result and result.get("action") == "generate_all":
+            self.action_generate_session_all()
+
     def _handle_session_list_screen_closed(
         self, result: dict[str, str] | None
     ) -> None:
@@ -4642,25 +5185,6 @@ class GitStudyApp(App):
                 legacy_request or self.saved_grading_request,
             )
         )
-
-        if self.is_mounted:
-            try:
-                self.query_one("#mode-selected", RadioButton).value = self.saved_commit_mode == "selected"
-                self.query_one("#difficulty-easy", RadioButton).value = self.saved_difficulty == "easy"
-                self.query_one("#difficulty-medium", RadioButton).value = self.saved_difficulty == "medium"
-                self.query_one("#difficulty-hard", RadioButton).value = self.saved_difficulty == "hard"
-                self.query_one("#style-mixed", RadioButton).value = self.saved_quiz_style == "mixed"
-                self.query_one("#style-study_session", RadioButton).value = self.saved_quiz_style == "study_session"
-                self.query_one("#style-multiple_choice", RadioButton).value = self.saved_quiz_style == "multiple_choice"
-                self.query_one("#style-short_answer", RadioButton).value = self.saved_quiz_style == "short_answer"
-                self.query_one("#style-conceptual", RadioButton).value = self.saved_quiz_style == "conceptual"
-                self.query_one("#request-read-input", TextArea).text = self.saved_read_request
-                self.query_one("#request-basic-input", TextArea).text = self.saved_basic_request
-                self.query_one("#request-inline-input", TextArea).text = self.saved_inline_request
-                self.query_one("#request-grading-input", TextArea).text = self.saved_grading_request
-            except Exception:
-                pass
-            self._update_request_input_height()
 
         self._restore_saved_commit_selection()
         self._refresh_commit_list_labels()
@@ -4798,6 +5322,9 @@ class GitStudyApp(App):
     @on(RadioSet.Changed, "#difficulty")
     @on(RadioSet.Changed, "#quiz-style")
     def handle_quiz_option_changed(self) -> None:
+        self.saved_commit_mode = self._current_commit_mode()
+        self.saved_difficulty = self._current_difficulty()
+        self.saved_quiz_style = self._current_quiz_style()
         self._save_app_state()
 
     @on(Input.Submitted, "#repo-location")
@@ -4820,7 +5347,11 @@ class GitStudyApp(App):
     @on(TextArea.Changed, "#request-basic-input")
     @on(TextArea.Changed, "#request-inline-input")
     @on(TextArea.Changed, "#request-grading-input")
-    def handle_request_changed(self) -> None:
+    def handle_request_changed(self, event: TextArea.Changed) -> None:
+        input_id = event.text_area.id or ""
+        kind = input_id.removeprefix("request-").removesuffix("-input")
+        if kind in REQUEST_KINDS:
+            self._set_saved_request_value(kind, event.text_area.text)
         self._update_request_input_height()
         self._save_app_state()
 
@@ -4910,18 +5441,13 @@ class GitStudyApp(App):
         self._set_result_tab("inline")
 
     def action_open_quiz_section(self) -> None:
-        inline_quiz = self.query_one("#inline-quiz-dock", InlineQuizDock)
-        if inline_quiz.display:
-            inline_quiz.hide_panel()
-            self._after_inline_quiz_closed()
-        self.query_one("#request-basic-input", TextArea).focus()
-        self._set_status("퀴즈 생성 섹션으로 이동했습니다.")
+        self.action_open_setup()
+        self._set_status("Setup 화면을 열었습니다.")
 
     def action_generate_session_all(self) -> None:
         if not self.commits:
             self._set_status("표시할 커밋이 없습니다.")
             return
-        self._set_result_tab("setup")
         self._set_status("Read, Basic, Inline 생성을 시작합니다.")
         self.action_generate_read()
         self.action_generate_quiz()
@@ -5035,6 +5561,9 @@ class GitStudyApp(App):
         saved_state = self._inline_saved_state_for_current_selection()
 
         if saved_state is not None and saved_state["questions"]:
+            target = self._capture_session_target()
+            if target is not None:
+                self._inline_session_targets[session_id] = target
             inline_quiz.show_quiz(
                 commit_context=commit_context,
                 repo=repo,
@@ -5063,12 +5592,41 @@ class GitStudyApp(App):
         state: InlineQuizSavedState,
         grading_summary: GradingSummary | None = None,
     ) -> None:
+        target = self._inline_session_targets.get(cache_key)
+        if target is None:
+            return
         self._save_inline_quiz_state_for_selection(
             state,
             grading_summary,
-            target=self._inline_session_targets.get(cache_key),
+            target=target,
         )
         self._update_top_toggle_buttons()
+
+    def notify_inline_quiz_started(self, cache_key: str) -> None:
+        target = self._inline_session_targets.get(cache_key)
+        if target is None:
+            return
+        self._pending_inline_targets[cache_key] = target
+        self._refresh_result_tab_labels()
+        self._refresh_result_command_row()
+
+    def notify_inline_quiz_finished(self, cache_key: str) -> None:
+        self._pending_inline_targets.pop(cache_key, None)
+        self._refresh_result_tab_labels()
+        self._refresh_result_command_row()
+
+    def notify_inline_grade_started(self, cache_key: str) -> None:
+        target = self._inline_session_targets.get(cache_key)
+        if target is None:
+            return
+        self._pending_inline_grade_targets[cache_key] = target
+        self._refresh_result_tab_labels()
+        self._refresh_result_command_row()
+
+    def notify_inline_grade_finished(self, cache_key: str) -> None:
+        self._pending_inline_grade_targets.pop(cache_key, None)
+        self._refresh_result_tab_labels()
+        self._refresh_result_command_row()
 
     def _inline_quiz_cache_key(self) -> str:
         """현재 선택에 해당하는 캐시 키 반환."""
@@ -5158,7 +5716,6 @@ class GitStudyApp(App):
             return
         if not self._ensure_api_key(action_label="퀴즈 생성"):
             return
-        self._set_result_tab("quiz")
 
         selection_payload = self._generation_commit_selection_payload()
         payload = {
@@ -5189,9 +5746,16 @@ class GitStudyApp(App):
         self.query_one("#result-quiz-grade", Button).disabled = True
         self.query_one("#result-quiz-retry-top", Button).disabled = True
         self.query_one("#result-quiz-grade-top", Button).disabled = True
-        self._pending_quiz_target = self._capture_session_target()
+        target = self._capture_session_target()
+        if target is not None:
+            session_id = self._session_id_from_target(target)
+            if session_id:
+                self._pending_quiz_targets[session_id] = target
+                self._quiz_progress_labels[session_id] = ""
+                self._quiz_error_messages.pop(session_id, None)
+                self._pending_quiz_target = target
         self._start_status_animation()
-        self.generate_quiz(payload)
+        self.generate_quiz(payload, target)
 
     def action_generate_read(self) -> None:
         if not self.commits:
@@ -5199,7 +5763,6 @@ class GitStudyApp(App):
             return
         if not self._ensure_api_key(action_label="읽을거리 생성"):
             return
-        self._set_result_tab("read")
 
         selection_payload = self._generation_commit_selection_payload()
         payload = {
@@ -5225,12 +5788,21 @@ class GitStudyApp(App):
                 payload["requested_commit_sha"] = requested_commit_sha
 
         self.query_one("#result-read", Button).disabled = True
-        self._pending_read_target = self._capture_session_target()
+        target = self._capture_session_target()
+        if target is not None:
+            session_id = self._session_id_from_target(target)
+            if session_id:
+                self._pending_read_targets[session_id] = target
+                self._pending_read_target = target
         self._start_read_status_animation()
-        self.generate_read(payload)
+        self.generate_read(payload, target)
 
     @work(thread=True)
-    def generate_quiz(self, payload: dict) -> None:
+    def generate_quiz(
+        self,
+        payload: dict,
+        target: dict[str, object] | None = None,
+    ) -> None:
         try:
             result = None
             for event in stream_quiz_progress(payload):
@@ -5239,6 +5811,7 @@ class GitStudyApp(App):
                         QuizNodeStarted(
                             str(event.get("node", "")),
                             str(event.get("label", "")),
+                            target,
                         )
                     )
                 elif event.get("type") == "result":
@@ -5251,7 +5824,7 @@ class GitStudyApp(App):
                 error_message = (
                     "텍스트 diff 기반 퀴즈 생성에는 OpenAI API Key가 필요합니다. API Key 버튼에서 설정해 주세요."
                 )
-            self.post_message(QuizFailed(error_message))
+            self.post_message(QuizFailed(error_message, target))
             return
 
         final_message = result["messages"][-1]
@@ -5260,11 +5833,16 @@ class GitStudyApp(App):
                 str(final_message.content),
                 time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 list(result.get("quiz_questions", [])),
+                target,
             )
         )
 
     @work(thread=True)
-    def generate_read(self, payload: dict) -> None:
+    def generate_read(
+        self,
+        payload: dict,
+        target: dict[str, object] | None = None,
+    ) -> None:
         try:
             result = None
             for event in stream_read_progress(payload):
@@ -5285,7 +5863,7 @@ class GitStudyApp(App):
                 error_message = (
                     "읽을거리 생성에는 OpenAI API Key가 필요합니다. API Key 버튼에서 설정해 주세요."
                 )
-            self.post_message(ReadFailed(error_message))
+            self.post_message(ReadFailed(error_message, target))
             return
 
         final_message = result["messages"][-1]
@@ -5293,6 +5871,7 @@ class GitStudyApp(App):
             ReadGenerated(
                 str(final_message.content),
                 time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                target,
             )
         )
 
@@ -5302,6 +5881,7 @@ class GitStudyApp(App):
         questions: list[dict],
         answers: dict[str, str],
         user_request: str = "",
+        target: dict[str, object] | None = None,
     ) -> None:
         try:
             grades = None
@@ -5336,7 +5916,7 @@ class GitStudyApp(App):
                 error_message = (
                     "일반 퀴즈 채점에는 OpenAI API Key가 필요합니다. API Key 버튼에서 설정해 주세요."
                 )
-            self.post_message(GeneralQuizGradeFailed(error_message))
+            self.post_message(GeneralQuizGradeFailed(error_message, target))
             return
 
         score_summary = {
@@ -5345,11 +5925,13 @@ class GitStudyApp(App):
             else 0,
             "max": 100,
         }
-        self.post_message(GeneralQuizGraded(grades, score_summary, grading_summary))
+        self.post_message(
+            GeneralQuizGraded(grades, score_summary, grading_summary, target)
+        )
 
     @on(QuizNodeStarted)
     def handle_quiz_node_started(self, message: QuizNodeStarted) -> None:
-        self._set_quiz_progress_node(message.label)
+        self._set_quiz_progress_node(message.label, target=message.target)
 
     @on(ReadNodeStarted)
     def handle_read_node_started(self, message: ReadNodeStarted) -> None:
@@ -5361,68 +5943,100 @@ class GitStudyApp(App):
 
     @on(QuizGenerated)
     def handle_quiz_generated(self, message: QuizGenerated) -> None:
-        self.query_one("#result-generate", Button).disabled = False
-        self.query_one("#result-quiz-retry-top", Button).disabled = False
-        self.query_one("#result-quiz-grade-top", Button).disabled = False
+        target = message.target
+        session_id = self._session_id_from_target(target)
+        if session_id:
+            self._pending_quiz_targets.pop(session_id, None)
+            self._quiz_progress_labels.pop(session_id, None)
+            self._quiz_error_messages.pop(session_id, None)
+        if self._pending_quiz_target is not None and self._session_id_from_target(
+            self._pending_quiz_target
+        ) == session_id:
+            self._pending_quiz_target = None
         self._stop_quiz_status_animation()
         self._quiz_generation_error_message = ""
-        self._set_status(self._current_generation_status_text() or "완료")
         content = (
             f"{self._result_metadata_block('md', created_at=message.created_at)}\n"
             f"{message.content}"
         )
-        self.quiz_content = content
         self._save_general_quiz_result_for_selection(
             content,
             message.questions,
-            target=self._pending_quiz_target,
+            target=target,
         )
-        self._pending_quiz_target = None
-        self._refresh_quiz_workspace()
-        self._rebuild_review_content_for_current_selection()
+        if self._target_matches_current_selection(target):
+            self.quiz_content = content
+            self._set_status(self._current_generation_status_text() or "완료")
+            self._refresh_quiz_workspace()
+            self._rebuild_review_content_for_current_selection()
         self._refresh_session_progress()
+        self._refresh_result_command_row()
         self._refresh_top_bar_context()
 
     @on(QuizFailed)
     def handle_quiz_failed(self, message: QuizFailed) -> None:
-        self.query_one("#result-generate", Button).disabled = False
+        target = message.target
+        session_id = self._session_id_from_target(target)
+        if session_id:
+            self._pending_quiz_targets.pop(session_id, None)
+            self._quiz_progress_labels.pop(session_id, None)
+            self._quiz_error_messages[session_id] = message.error_message
+        if self._pending_quiz_target is not None and self._session_id_from_target(
+            self._pending_quiz_target
+        ) == session_id:
+            self._pending_quiz_target = None
         self._stop_quiz_status_animation()
         self._quiz_generation_error_message = message.error_message
-        self._pending_quiz_target = None
-        self._set_status(self._current_generation_status_text() or "오류")
-        self.query_one("#result-quiz-retry-top", Button).disabled = False
-        self.query_one("#result-quiz-grade-top", Button).disabled = False
-        self.query_one("#result-quiz-retry", Button).disabled = False
-        self.query_one("#result-quiz-grade", Button).disabled = False
-        self._refresh_quiz_workspace()
-        self._set_tab_result("quiz", message.error_message)
+        if self._target_matches_current_selection(target):
+            self._set_status(self._current_generation_status_text() or "오류")
+            self._refresh_quiz_workspace()
+            self._set_tab_result("quiz", message.error_message)
+        self._refresh_result_command_row()
+        self._refresh_session_progress()
 
     @on(ReadGenerated)
     def handle_read_generated(self, message: ReadGenerated) -> None:
-        self.query_one("#result-read", Button).disabled = False
+        target = message.target
+        session_id = self._session_id_from_target(target)
+        if session_id:
+            self._pending_read_targets.pop(session_id, None)
+        if self._pending_read_target is not None and self._session_id_from_target(
+            self._pending_read_target
+        ) == session_id:
+            self._pending_read_target = None
         self._stop_read_status_animation()
-        self._set_status(self._current_generation_status_text() or "완료")
         content = (
             f"{self._result_metadata_block('md', created_at=message.created_at)}\n"
             f"{message.content}"
         )
-        self.read_content = content
         self._save_read_result_for_selection(
             content,
-            target=self._pending_read_target,
+            target=target,
         )
-        self._pending_read_target = None
-        self._rebuild_review_content_for_current_selection()
+        if self._target_matches_current_selection(target):
+            self._set_tab_result("read", content)
+            self._set_status(self._current_generation_status_text() or "완료")
+            self._rebuild_review_content_for_current_selection()
         self._refresh_session_progress()
+        self._refresh_result_command_row()
         self._refresh_top_bar_context()
 
     @on(ReadFailed)
     def handle_read_failed(self, message: ReadFailed) -> None:
-        self.query_one("#result-read", Button).disabled = False
+        target = message.target
+        session_id = self._session_id_from_target(target)
+        if session_id:
+            self._pending_read_targets.pop(session_id, None)
+        if self._pending_read_target is not None and self._session_id_from_target(
+            self._pending_read_target
+        ) == session_id:
+            self._pending_read_target = None
         self._stop_read_status_animation()
-        self._pending_read_target = None
-        self._set_status(self._current_generation_status_text() or "오류")
-        self._set_tab_result("read", message.error_message)
+        if self._target_matches_current_selection(target):
+            self._set_status(self._current_generation_status_text() or "오류")
+            self._set_tab_result("read", message.error_message)
+        self._refresh_result_command_row()
+        self._refresh_session_progress()
 
     @on(GeneralQuizGraded)
     def handle_general_quiz_graded(self, message: GeneralQuizGraded) -> None:
@@ -5431,8 +6045,7 @@ class GitStudyApp(App):
         self.query_one("#result-quiz-grade-top", Button).disabled = False
         self.query_one("#result-quiz-retry", Button).disabled = False
         self.query_one("#result-quiz-retry-top", Button).disabled = False
-        self._set_result_tab("quiz")
-        target = self._pending_general_quiz_grade_target
+        target = message.target or self._pending_general_quiz_grade_target
         session = self._load_or_create_learning_session_for_target(target)
         if session is None:
             self._pending_general_quiz_grade_target = None
@@ -5460,11 +6073,13 @@ class GitStudyApp(App):
             ),
         )
         self._pending_general_quiz_grade_target = None
-        self._set_status(
-            f"일반 퀴즈 채점 완료 ({message.score_summary.get('total', 0)}/{message.score_summary.get('max', 100)})"
-        )
-        self._rebuild_review_content_for_current_selection()
-        self._refresh_quiz_workspace()
+        if self._target_matches_current_selection(target):
+            self._set_result_tab("quiz")
+            self._set_status(
+                f"일반 퀴즈 채점 완료 ({message.score_summary.get('total', 0)}/{message.score_summary.get('max', 100)})"
+            )
+            self._rebuild_review_content_for_current_selection()
+            self._refresh_quiz_workspace()
         self._refresh_session_progress()
         self._refresh_top_bar_context()
 
@@ -5476,9 +6091,10 @@ class GitStudyApp(App):
         self.query_one("#result-quiz-grade-top", Button).disabled = False
         self.query_one("#result-quiz-retry", Button).disabled = False
         self.query_one("#result-quiz-retry-top", Button).disabled = False
-        self._set_status("오류")
-        self.query_one("#result-quiz-feedback", Static).update(message.error_message)
-        self._refresh_quiz_workspace()
+        if self._target_matches_current_selection(message.target):
+            self._set_status("오류")
+            self.query_one("#result-quiz-feedback", Static).update(message.error_message)
+            self._refresh_quiz_workspace()
 
     def _toggle_result_metadata(self) -> None:
         content = self._current_result_content_for_download()

@@ -332,6 +332,14 @@ def save_general_quiz_rendered_result(
     if questions is not None:
         session["general_quiz"]["questions"] = questions
     session["general_quiz"]["rendered_markdown"] = rendered_markdown
+    session["general_quiz"]["attempt"] = {
+        "answers": {},
+        "submitted_at": None,
+        "grades": [],
+        "score_summary": None,
+    }
+    session["general_quiz"]["grading_summary"] = None
+    session["general_quiz"]["current_index"] = 0
     session["general_quiz"]["updated_at"] = stamp
     session["session_meta"]["current_step"] = "general_quiz"
     _invalidate_review(session)

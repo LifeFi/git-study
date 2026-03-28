@@ -11,6 +11,7 @@ QUIZ_NODE_LABELS = {
     "analyze_change": "변경 분석",
     "draft_quiz": "초안 생성",
     "review_quiz": "품질 검토",
+    "repair_quiz": "초안 수정",
     "finalize_quiz": "결과 정리",
 }
 
@@ -21,7 +22,6 @@ def _quiz_config() -> dict[str, Any]:
 
 def stream_quiz_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
     merged_result: dict[str, Any] = {}
-    seen_nodes: set[str] = set()
 
     for chunk in quiz_graph.stream(
         payload,
@@ -31,13 +31,11 @@ def stream_quiz_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
         if not isinstance(chunk, dict):
             continue
         for node_name, update in chunk.items():
-            if node_name not in seen_nodes:
-                seen_nodes.add(node_name)
-                yield {
-                    "type": "node",
-                    "node": node_name,
-                    "label": QUIZ_NODE_LABELS.get(node_name, node_name),
-                }
+            yield {
+                "type": "node",
+                "node": node_name,
+                "label": QUIZ_NODE_LABELS.get(node_name, node_name),
+            }
             if isinstance(update, dict):
                 merged_result.update(update)
 

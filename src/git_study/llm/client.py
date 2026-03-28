@@ -48,4 +48,58 @@ class LLMClient:
 
     def invoke_json(self, prompt: str) -> Any:
         raw = self.invoke_text(prompt)
-        return json.loads(extract_json_block(raw))
+        extracted = extract_json_block(raw)
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError as exc:
+            preview = " ".join(raw.split())[:160]
+            if not preview:
+                preview = "<empty>"
+            raise ValueError(
+                "LLM이 JSON 응답 대신 비어 있거나 파싱할 수 없는 텍스트를 반환했습니다. "
+                f"response_preview={preview}"
+            ) from exc
+
+    def invoke_structured(
+        self,
+        prompt: str,
+        schema: Any,
+        *,
+        method: str = "json_schema",
+        strict: bool | None = True,
+    ) -> Any:
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "IMPORTANT: Return only data that matches the required schema exactly. "
+            "Do not add markdown, commentary, or extra wrapper text."
+        )
+        structured_llm = self._llm.with_structured_output(
+            schema,
+            method=method,
+            strict=strict,
+        )
+        try:
+            return structured_llm.invoke(prompt)
+        except Exception as exc:
+            try:
+                return structured_llm.invoke(retry_prompt)
+            except Exception as retry_exc:
+                try:
+                    relaxed_structured_llm = self._llm.with_structured_output(
+                        schema,
+                        method=method,
+                        strict=False,
+                    )
+                    return relaxed_structured_llm.invoke(retry_prompt)
+                except Exception:
+                    try:
+                        return self.invoke_json(retry_prompt)
+                    except Exception as json_exc:
+                        detail = str(json_exc).strip()
+                        if len(detail) > 220:
+                            detail = f"{detail[:220]}..."
+                        raise ValueError(
+                            "LLM structured output 호출이 실패했습니다. "
+                            "모델이 스키마에 맞는 응답을 반환하지 못했습니다. "
+                            f"fallback_error={detail or str(retry_exc)}"
+                        ) from exc

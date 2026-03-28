@@ -58,6 +58,28 @@ def test_stream_quiz_progress_yields_node_events_and_result(monkeypatch) -> None
     assert events[-1]["result"]["messages"][0].content == "quiz body"
 
 
+def test_stream_quiz_progress_keeps_repeated_review_and_repair_nodes(monkeypatch) -> None:
+    class StubGraph:
+        def stream(self, payload, config=None, stream_mode=None):
+            yield {"draft_quiz": {"quiz_questions": []}}
+            yield {"review_quiz": {"quiz_review": {"is_valid": False}}}
+            yield {"repair_quiz": {"quiz_questions": []}}
+            yield {"review_quiz": {"quiz_review": {"is_valid": True}}}
+            yield {"finalize_quiz": {"final_output": "quiz body"}}
+
+    monkeypatch.setattr("git_study.services.quiz_service.quiz_graph", StubGraph())
+
+    events = list(stream_quiz_progress({"messages": [{"role": "user", "content": "hello"}]}))
+
+    assert [event["node"] for event in events if event["type"] == "node"] == [
+        "draft_quiz",
+        "review_quiz",
+        "repair_quiz",
+        "review_quiz",
+        "finalize_quiz",
+    ]
+
+
 def test_run_read_wraps_final_output_into_messages(monkeypatch) -> None:
     captured: dict = {}
 
@@ -100,6 +122,28 @@ def test_stream_read_progress_yields_node_events_and_result(monkeypatch) -> None
     ]
     assert events[-1]["type"] == "result"
     assert events[-1]["result"]["messages"][0].content == "reading body"
+
+
+def test_stream_read_progress_keeps_repeated_review_and_repair_nodes(monkeypatch) -> None:
+    class StubGraph:
+        def stream(self, payload, config=None, stream_mode=None):
+            yield {"draft_reading": {"reading_draft": "body"}}
+            yield {"review_reading": {"reading_review": {"is_valid": False}}}
+            yield {"repair_reading": {"reading_draft": "body 2"}}
+            yield {"review_reading": {"reading_review": {"is_valid": True}}}
+            yield {"finalize_reading": {"final_output": "reading body"}}
+
+    monkeypatch.setattr("git_study.services.read_service.read_graph", StubGraph())
+
+    events = list(stream_read_progress({"messages": [{"role": "user", "content": "hello"}]}))
+
+    assert [event["node"] for event in events if event["type"] == "node"] == [
+        "draft_reading",
+        "review_reading",
+        "repair_reading",
+        "review_reading",
+        "finalize_reading",
+    ]
 
 
 def test_generate_inline_quiz_questions_passes_count_and_context(monkeypatch) -> None:
@@ -154,6 +198,30 @@ def test_stream_inline_quiz_progress_yields_node_events_and_result(monkeypatch) 
         "type": "result",
         "result": {"actual_paths": ["src/a.py"], "inline_questions": [{"id": "q1"}]},
     }
+
+
+def test_stream_inline_quiz_progress_keeps_repeated_review_and_repair_nodes(monkeypatch) -> None:
+    class StubGraph:
+        def stream(self, payload, stream_mode=None):
+            yield {"generate_inline_questions": {"inline_questions": [{"id": "q1"}]}}
+            yield {"review_inline_questions": {"inline_review": {"is_valid": False}}}
+            yield {"repair_inline_questions": {"inline_questions": [{"id": "q1"}]}}
+            yield {"review_inline_questions": {"inline_review": {"is_valid": True}}}
+            yield {"finalize_inline_questions": {"inline_questions": [{"id": "q1"}]}}
+
+    monkeypatch.setattr(
+        "git_study.services.inline_quiz_service.inline_quiz_graph", StubGraph()
+    )
+
+    events = list(stream_inline_quiz_progress({"commit_sha": "abc"}))
+
+    assert [event["node"] for event in events if event["type"] == "node"] == [
+        "generate_inline_questions",
+        "review_inline_questions",
+        "repair_inline_questions",
+        "review_inline_questions",
+        "finalize_inline_questions",
+    ]
 
 
 def test_generate_inline_quiz_grades_passes_questions_and_answers(monkeypatch) -> None:

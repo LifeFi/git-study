@@ -3,10 +3,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rich.columns import Columns
+from rich.console import Group
+from rich.panel import Panel
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -23,6 +26,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from .answer_input import AnswerTextArea
 from .inline_quiz import SessionInlineQuizView
 from textual.widgets._markdown import MarkdownFence, MarkdownTableOfContents
 
@@ -212,6 +216,175 @@ class SessionSetupView(Vertical):
                     yield Static(self.request_example_text, classes="help-text", id="request-example")
 
 
+class SetupScreen(ModalScreen[dict[str, str] | None]):
+    CSS = """
+    #setup-dialog {
+        width: 120;
+        max-width: 92%;
+        height: 40;
+        max-height: 90%;
+        padding: 1 2;
+        border: round #b88a3b;
+        background: $surface;
+        margin: 2 0;
+    }
+
+    #setup-title-row {
+        height: auto;
+        align: left middle;
+        margin-bottom: 1;
+    }
+
+    #setup-title {
+        text-style: bold;
+        color: $accent;
+    }
+
+    #setup-title-spacer {
+        width: 1fr;
+    }
+
+    #setup-close {
+        width: auto;
+        min-width: 5;
+        height: 1;
+        min-height: 1;
+        padding: 0;
+    }
+
+    #setup-body {
+        height: 1fr;
+        overflow-y: auto;
+    }
+    """
+
+    BINDINGS = [("escape", "cancel", "Close")]
+
+    def __init__(
+        self,
+        *,
+        saved_commit_mode: str,
+        saved_difficulty: str,
+        saved_quiz_style: str,
+        saved_read_request: str,
+        saved_basic_request: str,
+        saved_inline_request: str,
+        saved_grading_request: str,
+        request_placeholder: str,
+        request_example_text: str,
+    ) -> None:
+        super().__init__()
+        self.saved_commit_mode = saved_commit_mode
+        self.saved_difficulty = saved_difficulty
+        self.saved_quiz_style = saved_quiz_style
+        self.saved_read_request = saved_read_request
+        self.saved_basic_request = saved_basic_request
+        self.saved_inline_request = saved_inline_request
+        self.saved_grading_request = saved_grading_request
+        self.request_placeholder = request_placeholder
+        self.request_example_text = request_example_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="setup-dialog"):
+            with Horizontal(id="setup-title-row"):
+                yield Label("Setup", id="setup-title")
+                yield Static("", id="setup-title-spacer")
+                yield Button("Close", id="setup-close", classes="result-tool result-action")
+            with Vertical(id="setup-body"):
+                yield SessionSetupView(
+                    saved_commit_mode=self.saved_commit_mode,
+                    saved_difficulty=self.saved_difficulty,
+                    saved_quiz_style=self.saved_quiz_style,
+                    saved_read_request=self.saved_read_request,
+                    saved_basic_request=self.saved_basic_request,
+                    saved_inline_request=self.saved_inline_request,
+                    saved_grading_request=self.saved_grading_request,
+                    request_placeholder=self.request_placeholder,
+                    request_example_text=self.request_example_text,
+                )
+
+    def on_mount(self) -> None:
+        try:
+            self.app._update_request_input_height()
+            self.query_one("#commit-mode", RadioSet).focus()
+        except Exception:
+            pass
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#setup-close")
+    def handle_close(self) -> None:
+        self.dismiss(None)
+
+
+class SessionHomeView(Vertical):
+    def __init__(
+        self,
+        initial_content: str = "",
+        samples: list[dict[str, object]] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.initial_content = initial_content
+        self.samples = samples or []
+
+    def _sample_renderable(self, sample: dict[str, object]) -> Panel:
+        title = str(sample.get("name", "Sample"))
+        color = str(sample.get("color", "#ffffff"))
+        art_lines = list(sample.get("art", []))
+        outline_color = str(sample.get("outline_color", "")).strip()
+        fill_color = str(sample.get("fill_color", "")).strip()
+        particle_color = str(sample.get("particle_color", fill_color or color)).strip()
+        cap_color = str(sample.get("cap_color", outline_color or color)).strip()
+        art = Text()
+        for index, line in enumerate(art_lines):
+            if index:
+                art.append("\n")
+            if outline_color or fill_color:
+                for marker in str(line):
+                    if marker == "O":
+                        art.append("█", style=f"bold {outline_color or color}")
+                    elif marker == "F":
+                        art.append("█", style=f"bold {fill_color or color}")
+                    elif marker == "C":
+                        art.append("█", style=f"bold {cap_color or color}")
+                    elif marker == "P":
+                        art.append("✦", style=f"bold {particle_color or color}")
+                    else:
+                        art.append(marker)
+            else:
+                art.append(str(line), style=f"bold {color}")
+        header = Text()
+        header.append(title, style="bold")
+        header.append("  ", style="default")
+        if outline_color or fill_color:
+            header.append(
+                f"{outline_color or '-'} / {fill_color or color}",
+                style="dim",
+            )
+        else:
+            header.append(color, style="dim")
+        return Panel(
+            Group(header, Text(""), art),
+            border_style=color,
+            padding=(0, 1),
+            width=24,
+        )
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="result-home-scroll"):
+            yield Static(self.initial_content, id="result-home-content")
+            yield Static(
+                Columns(
+                    [self._sample_renderable(sample) for sample in self.samples],
+                    expand=True,
+                    equal=True,
+                ),
+                id="result-home-grid",
+            )
+
+
 class SessionMarkdownView(Vertical):
     def __init__(self, initial_content: str = "", *, viewer_id: str, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -228,21 +401,24 @@ class SessionMarkdownView(Vertical):
 
 class SessionQuizView(Vertical):
     def compose(self) -> ComposeResult:
+        yield Horizontal(id="result-quiz-nav")
         with Horizontal(id="result-quiz-meta-row"):
             yield Label("", id="result-quiz-meta")
             yield Static("", id="result-quiz-meta-spacer")
             yield Static("", id="result-quiz-progress")
         yield Static("", id="result-quiz-question")
-        yield TextArea("", id="result-quiz-answer")
+        yield Label("답변:", id="result-quiz-answer-label")
+        yield AnswerTextArea("", id="result-quiz-answer")
         yield Static("", id="result-quiz-feedback")
         with Horizontal(id="result-quiz-controls"):
             yield Button(
-                "Prev",
+                "◀ Prev",
                 id="result-quiz-prev",
                 classes="result-tool result-action",
             )
+            yield Static("", id="result-quiz-controls-spacer")
             yield Button(
-                "Next",
+                "Next ▶",
                 id="result-quiz-next",
                 classes="result-tool result-action",
             )
@@ -290,7 +466,7 @@ class ResultLoadScreen(ModalScreen[Path | None]):
         height: 22;
         max-height: 80%;
         padding: 1 2;
-        border: round $accent;
+        border: round #b88a3b;
         background: $surface;
         margin: 4 0;
     }
@@ -371,7 +547,7 @@ class RemoteRepoCacheScreen(ModalScreen[dict[str, str] | None]):
         height: 36;
         max-height: 85%;
         padding: 1 2;
-        border: round $accent;
+        border: round #b88a3b;
         background: $surface;
         margin: 4 0;
     }
@@ -470,16 +646,16 @@ class RemoteRepoCacheScreen(ModalScreen[dict[str, str] | None]):
     }
 
     #cache-actions > Button:disabled {
-        background: transparent;
-        border: none;
+        background: $surface;
+        border: solid $panel;
         color: $text-muted;
         text-style: dim;
     }
 
     #cache-actions > Button:disabled:hover,
     #cache-actions > Button:disabled:focus {
-        background: transparent;
-        border: none;
+        background: $surface;
+        border: solid $panel;
         color: $text-muted;
         text-style: dim;
     }
@@ -587,7 +763,7 @@ class RemoteRepoCacheScreen(ModalScreen[dict[str, str] | None]):
 
     def _update_action_state(self) -> None:
         has_selected = self._selected_entry() is not None
-        self.query_one("#cache-remove-all", Button).disabled = not has_selected
+        self.query_one("#cache-remove-all", Button).disabled = not bool(self.entries)
         self.query_one("#cache-remove", Button).disabled = not has_selected
         self.query_one("#cache-select", Button).disabled = not has_selected
 
@@ -660,7 +836,7 @@ class SessionListScreen(ModalScreen[dict[str, str] | None]):
         height: 36;
         max-height: 85%;
         padding: 1 2;
-        border: round $accent;
+        border: round #b88a3b;
         background: $surface;
         margin: 4 0;
     }
@@ -756,16 +932,16 @@ class SessionListScreen(ModalScreen[dict[str, str] | None]):
     }
 
     #session-actions > Button:disabled {
-        background: transparent;
-        border: none;
+        background: $surface;
+        border: solid $panel;
         color: $text-muted;
         text-style: dim;
     }
 
     #session-actions > Button:disabled:hover,
     #session-actions > Button:disabled:focus {
-        background: transparent;
-        border: none;
+        background: $surface;
+        border: solid $panel;
         color: $text-muted;
         text-style: dim;
     }
@@ -906,7 +1082,7 @@ class SessionListScreen(ModalScreen[dict[str, str] | None]):
 
     def _update_action_state(self) -> None:
         has_selected = self._selected_entry() is not None
-        self.query_one("#session-remove-all", Button).disabled = not has_selected
+        self.query_one("#session-remove-all", Button).disabled = not bool(self.entries)
         self.query_one("#session-remove", Button).disabled = not has_selected
         self.query_one("#session-select", Button).disabled = not has_selected
 
@@ -955,7 +1131,7 @@ class ApiKeyScreen(ModalScreen[dict[str, str] | None]):
         height: 22;
         max-height: 85%;
         padding: 1 2;
-        border: round $accent;
+        border: round #b88a3b;
         background: $surface;
         margin: 4 0;
     }

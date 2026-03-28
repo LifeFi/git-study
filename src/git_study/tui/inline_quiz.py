@@ -6,6 +6,7 @@ from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Key
 from textual.timer import Timer
 from textual.widgets import Button, Label, Static, TextArea
 
@@ -27,6 +28,7 @@ from ..services.inline_quiz_service import (
     stream_inline_quiz_progress,
 )
 from ..types import GradingSummary, InlineQuizGrade, InlineQuizQuestion
+from .answer_input import AnswerTextArea
 from .code_browser import highlight_code_lines
 
 
@@ -120,6 +122,16 @@ INLINE_QUIZ_SHARED_CSS = """
         text-style: bold;
         width: auto;
         margin-right: 1;
+    }
+
+    #iq-header-status {
+        width: auto;
+        color: $text-muted;
+    }
+
+    #iq-header-status.-loading {
+        color: $success;
+        text-style: bold;
     }
 
     #iq-header-spacer {
@@ -245,7 +257,7 @@ INLINE_QUIZ_SHARED_CSS = """
     }
 
     #iq-answer-input {
-        height: 1fr;
+        height: 8;
         margin-bottom: 1;
     }
 
@@ -287,31 +299,9 @@ INLINE_QUIZ_SHARED_CSS = """
         width: 1fr;
     }
 
-    #iq-grade-btn {
-        width: auto;
-        min-width: 8;
-        height: 1;
-        min-height: 1;
-        padding: 0;
-        background: transparent;
-        border: none;
-        color: cyan;
-        text-style: bold;
-        tint: transparent;
-    }
-
-    #iq-grade-btn:hover,
-    #iq-grade-btn:focus {
-        background: transparent;
-        border: none;
-        color: cyan;
-        text-style: bold underline;
-    }
-
     .iq-nav-btn:disabled,
     #iq-prev:disabled,
-    #iq-next:disabled,
-    #iq-grade-btn:disabled {
+    #iq-next:disabled {
         color: $text-muted;
         text-style: none;
     }
@@ -321,9 +311,7 @@ INLINE_QUIZ_SHARED_CSS = """
     #iq-prev:disabled:hover,
     #iq-prev:disabled:focus,
     #iq-next:disabled:hover,
-    #iq-next:disabled:focus,
-    #iq-grade-btn:disabled:hover,
-    #iq-grade-btn:disabled:focus {
+    #iq-next:disabled:focus {
         background: transparent;
         border: none;
         color: $text-muted;
@@ -333,18 +321,20 @@ INLINE_QUIZ_SHARED_CSS = """
     #iq-results-group {
         height: 1fr;
         display: none;
+        margin-bottom: 1;
     }
 
     #iq-results-title {
         height: auto;
         color: $accent;
         text-style: bold;
-        margin: 1 0;
+        margin: 0 0 1 0;
     }
 
     #iq-result-scroll {
         height: 1fr;
         border: round $panel;
+        background: $boost;
     }
 
     #iq-result-content {
@@ -352,8 +342,15 @@ INLINE_QUIZ_SHARED_CSS = """
         padding: 1;
     }
 
+    #iq-status-scroll {
+        height: 3;
+        background: $panel;
+        scrollbar-size-vertical: 1;
+    }
+
     #iq-status-bar {
         height: auto;
+        min-height: 3;
         padding: 0 1;
         color: $text-muted;
         background: $panel;
@@ -391,10 +388,17 @@ class InlineQuizWidget(Vertical):
         self.grading_summary: GradingSummary = {}
         self._nav_build_serial = 0
         self._animate_timer: Timer | None = None
+        self._session_serial = 0
+
+    def _score_gauge_text(self, score: int) -> str:
+        clamped = max(0, min(100, int(score)))
+        filled = clamped // 10
+        return ("█" * filled) + ("░" * (10 - filled))
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="iq-header"):
             yield Label("Inline Quiz", id="iq-title")
+            yield Label("", id="iq-header-status")
             yield Static("", id="iq-header-spacer")
             yield Button("Close", id="iq-close", compact=True, flat=True)
         with Horizontal(id="iq-body"):
@@ -408,10 +412,14 @@ class InlineQuizWidget(Vertical):
                     yield Label("", id="iq-q-type-badge")
                     yield Static("질문 생성 대기 중...", id="iq-question-text")
                     yield Label("답변:", id="iq-answer-label")
-                    yield TextArea("", id="iq-answer-input")
+                    yield AnswerTextArea("", id="iq-answer-input")
+                    with Vertical(id="iq-results-group"):
+                        yield Label("채점 결과", id="iq-results-title")
+                        with VerticalScroll(id="iq-result-scroll"):
+                            yield Static("", id="iq-result-content")
                     with Horizontal(id="iq-nav-row"):
                         yield Button(
-                            "◀ 이전",
+                            "◀ Prev",
                             id="iq-prev",
                             classes="iq-nav-btn",
                             compact=True,
@@ -419,23 +427,14 @@ class InlineQuizWidget(Vertical):
                         )
                         yield Static("", id="iq-nav-spacer")
                         yield Button(
-                            "다음 ▶",
+                            "Next ▶",
                             id="iq-next",
                             classes="iq-nav-btn",
                             compact=True,
                             flat=True,
                         )
-                        yield Button(
-                            "채점하기",
-                            id="iq-grade-btn",
-                            compact=True,
-                            flat=True,
-                        )
-                with Vertical(id="iq-results-group"):
-                    yield Label("채점 결과", id="iq-results-title")
-                    with VerticalScroll(id="iq-result-scroll"):
-                        yield Static("", id="iq-result-content")
-        yield Static("Inline Quiz를 열어주세요.", id="iq-status-bar")
+        with VerticalScroll(id="iq-status-scroll"):
+            yield Static("Inline Quiz를 열어주세요.", id="iq-status-bar")
 
     def on_mount(self) -> None:
         self._animate_timer = self.set_interval(0.35, self._tick_animation, pause=True)
@@ -458,6 +457,38 @@ class InlineQuizWidget(Vertical):
         if callable(save_state):
             save_state(self.cache_key, self.get_saved_state(), self.grading_summary)
 
+    def _notify_inline_generation_started(self) -> None:
+        app = getattr(self, "app", None)
+        if app is None or not self.cache_key:
+            return
+        notify = getattr(app, "notify_inline_quiz_started", None)
+        if callable(notify):
+            notify(self.cache_key)
+
+    def _notify_inline_generation_finished(self) -> None:
+        app = getattr(self, "app", None)
+        if app is None or not self.cache_key:
+            return
+        notify = getattr(app, "notify_inline_quiz_finished", None)
+        if callable(notify):
+            notify(self.cache_key)
+
+    def _notify_inline_grading_started(self) -> None:
+        app = getattr(self, "app", None)
+        if app is None or not self.cache_key:
+            return
+        notify = getattr(app, "notify_inline_grade_started", None)
+        if callable(notify):
+            notify(self.cache_key)
+
+    def _notify_inline_grading_finished(self) -> None:
+        app = getattr(self, "app", None)
+        if app is None or not self.cache_key:
+            return
+        notify = getattr(app, "notify_inline_grade_finished", None)
+        if callable(notify):
+            notify(self.cache_key)
+
     def show_quiz(
         self,
         *,
@@ -470,6 +501,8 @@ class InlineQuizWidget(Vertical):
         user_request: str = "",
         grading_request: str = "",
     ) -> None:
+        self._session_serial += 1
+        session_serial = self._session_serial
         self.display = True
         self.styles.display = "block"
         self.commit_context = commit_context
@@ -483,18 +516,29 @@ class InlineQuizWidget(Vertical):
         title = f"Inline Quiz  {title_suffix}".rstrip()
         self.query_one("#iq-title", Label).update(title)
         if saved_state is not None:
+            self._notify_inline_generation_finished()
             self._restore_state(saved_state)
         else:
             self._state = "loading"
+            self._notify_inline_generation_started()
             self._anim_frame = 0
             if self._animate_timer is not None:
                 self._animate_timer.reset()
                 self._animate_timer.resume()
             self._tick_animation()
-            self._generate_questions()
+            self._generate_questions(
+                session_serial,
+                commit_context,
+                repo,
+                target_commit_sha,
+                user_request,
+            )
         self._notify_app_controls_changed()
 
     def hide_panel(self) -> None:
+        self._session_serial += 1
+        self._notify_inline_generation_finished()
+        self._notify_inline_grading_finished()
         self._save_current_answer()
         if self.cache_key and hasattr(self.app, "save_inline_quiz_state"):
             self.app.save_inline_quiz_state(self.cache_key, self.get_saved_state())
@@ -507,6 +551,9 @@ class InlineQuizWidget(Vertical):
         return 78
 
     def show_placeholder(self, message: str) -> None:
+        self._session_serial += 1
+        self._notify_inline_generation_finished()
+        self._notify_inline_grading_finished()
         self.display = True
         self.styles.display = "block"
         self.questions = []
@@ -522,6 +569,8 @@ class InlineQuizWidget(Vertical):
             self._animate_timer.pause()
         self._nav_build_serial += 1
         self.query_one("#iq-title", Label).update("Inline Quiz")
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
         self.query_one("#iq-q-nav", Horizontal).remove_children()
         self.query_one("#iq-q-type-badge", Label).update("")
         self.query_one("#iq-question-text", Static).update(message)
@@ -534,7 +583,6 @@ class InlineQuizWidget(Vertical):
         self.query_one("#iq-code-content", Static).update(
             Text("커밋을 선택하면 이 영역에 앵커된 코드가 표시됩니다.", style="dim")
         )
-        self.query_one("#iq-grade-btn", Button).disabled = True
         self._set_status(message)
         self._notify_app_controls_changed()
 
@@ -557,26 +605,43 @@ class InlineQuizWidget(Vertical):
         self.query_one("#iq-q-nav", Horizontal).remove_children()
         self.query_one("#iq-q-type-badge", Label).update("")
         self.query_one("#iq-question-text", Static).update("")
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
         self.query_one("#iq-code-file-label", Label).add_class("-loading")
         self.query_one("#iq-answer-input", TextArea).text = ""
         self.query_one("#iq-answering-group", Vertical).display = True
         self.query_one("#iq-results-group", Vertical).display = False
         self.query_one("#iq-code-file-label", Label).update("인라인 퀴즈 생성 중.")
         self.query_one("#iq-code-content", Static).update("")
-        self.query_one("#iq-grade-btn", Button).disabled = False
-        self._set_status("질문을 생성하는 중.")
+        self._set_status("")
 
     def _restore_state(self, saved: InlineQuizSavedState) -> None:
-        self._known_files = saved["known_files"]
-        self._on_questions_loaded(saved["questions"])
-        self.answers = saved["answers"]
-        self.current_index = saved["current_index"]
-        if saved["grades"]:
-            self.grades = saved["grades"]
+        self.questions = list(saved["questions"])
+        self.answers = dict(saved["answers"])
+        self.grades = list(saved["grades"])
+        self.current_index = int(saved["current_index"])
+        self._known_files = dict(saved["known_files"])
+        self._resolved_paths = {}
+        self._anchor_cache = {}
+        self._loading_progress_label = ""
+        self._grading_progress_label = ""
+        if self._animate_timer is not None:
+            self._animate_timer.pause()
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
+        self.query_one("#iq-code-file-label", Label).remove_class("-loading")
+        self._build_q_nav()
+        self._update_question_panel(focus_input=False)
+        self._update_code_panel()
+        if self.grades:
+            self._state = "results"
             self._show_results()
         else:
-            self._update_question_panel(focus_input=False)
-            self._update_code_panel()
+            self._state = "answering"
+            loaded_paths = ", ".join(self._known_files.keys()) or "없음"
+            self._set_status(
+                f"질문 {len(self.questions)}개 복원됨  |  로드된 파일: {loaded_paths}"
+            )
         self._notify_app_controls_changed()
 
     def _tick_animation(self) -> None:
@@ -589,17 +654,19 @@ class InlineQuizWidget(Vertical):
                 if self._loading_progress_label
                 else f"인라인 퀴즈 생성 중{dots}"
             )
-            self._set_status(progress_text)
             self.query_one("#iq-code-file-label", Label).add_class("-loading")
             self.query_one("#iq-code-file-label", Label).update(progress_text)
+            self.query_one("#iq-header-status", Label).update("")
+            self.query_one("#iq-header-status", Label).remove_class("-loading")
             self.query_one("#iq-question-text", Static).update("")
         elif self._state == "grading":
-            base = (
+            progress_text = (
                 f"채점 중 [{self._grading_progress_label}]"
                 if self._grading_progress_label
                 else "채점 중"
             )
-            self._set_status(f"{base}{dots}")
+            self.query_one("#iq-header-status", Label).update(f"{progress_text}{dots}")
+            self.query_one("#iq-header-status", Label).add_class("-loading")
         self._anim_frame += 1
 
     def _set_loading_progress_node(self, label: str) -> None:
@@ -615,19 +682,23 @@ class InlineQuizWidget(Vertical):
     def _set_status(self, text: str) -> None:
         self.query_one("#iq-status-bar", Static).update(text)
 
-    def _preload_known_files(self) -> None:
-        file_context_text = self.commit_context.get("file_context_text", "")
-        self._known_files.update(parse_file_context_blocks(file_context_text))
+    def _build_known_files(
+        self,
+        commit_context: dict,
+        repo,
+        target_commit_sha: str,
+    ) -> dict[str, str]:
+        known_files = dict(parse_file_context_blocks(commit_context.get("file_context_text", "")))
 
-        all_paths: set[str] = set(self._known_files.keys())
+        all_paths: set[str] = set(known_files.keys())
         for path in extract_file_paths_from_summary(
-            self.commit_context.get("changed_files_summary", "")
+            commit_context.get("changed_files_summary", "")
         ):
             all_paths.add(path)
 
         parent_sha: str | None = None
         try:
-            commit = self.repo.commit(self.target_commit_sha)
+            commit = repo.commit(target_commit_sha)
             if commit.parents:
                 parent_sha = commit.parents[0].hexsha
         except Exception:
@@ -635,30 +706,43 @@ class InlineQuizWidget(Vertical):
 
         for path in all_paths:
             full = get_file_content_at_commit_or_empty(
-                self.repo, self.target_commit_sha, path
+                repo, target_commit_sha, path
             )
             if full:
-                self._known_files[path] = full
+                known_files[path] = full
             elif parent_sha:
                 parent_full = get_file_content_at_commit_or_empty(
-                    self.repo, parent_sha, path
+                    repo, parent_sha, path
                 )
                 if parent_full:
-                    self._known_files[path] = parent_full
+                    known_files[path] = parent_full
+        return known_files
 
     @work(thread=True)
-    def _generate_questions(self) -> None:
+    def _generate_questions(
+        self,
+        session_serial: int,
+        commit_context: dict,
+        repo,
+        target_commit_sha: str,
+        user_request: str,
+    ) -> None:
         try:
-            self._preload_known_files()
-            self.app.call_from_thread(self._set_loading_progress_node, "파일 문맥 준비")
+            known_files = self._build_known_files(commit_context, repo, target_commit_sha)
+            self.app.call_from_thread(
+                self._set_loading_progress_if_current,
+                session_serial,
+                "파일 문맥 준비",
+            )
             questions = None
             for event in stream_inline_quiz_progress(
-                self.commit_context,
-                user_request=self.user_request,
+                commit_context,
+                user_request=user_request,
             ):
                 if event.get("type") == "node":
                     self.app.call_from_thread(
-                        self._set_loading_progress_node,
+                        self._set_loading_progress_if_current,
+                        session_serial,
                         str(event.get("label", "")),
                     )
                 elif event.get("type") == "result":
@@ -666,19 +750,60 @@ class InlineQuizWidget(Vertical):
                     questions = result.get("inline_questions", [])
             if questions is None:
                 questions = generate_inline_quiz_questions(
-                    self.commit_context,
-                    user_request=self.user_request,
+                    commit_context,
+                    user_request=user_request,
                 )
-            self.app.call_from_thread(self._on_questions_loaded, questions)
+            self.app.call_from_thread(
+                self._apply_questions_loaded_if_current,
+                session_serial,
+                known_files,
+                questions,
+            )
         except Exception as exc:
-            self.app.call_from_thread(self._on_questions_failed, str(exc))
+            self.app.call_from_thread(
+                self._apply_questions_failed_if_current,
+                session_serial,
+                str(exc),
+            )
+
+    def _set_loading_progress_if_current(self, session_serial: int, label: str) -> None:
+        if session_serial != self._session_serial:
+            return
+        self._set_loading_progress_node(label)
+
+    def _apply_questions_loaded_if_current(
+        self,
+        session_serial: int,
+        known_files: dict[str, str],
+        questions: list[InlineQuizQuestion],
+    ) -> None:
+        if session_serial != self._session_serial:
+            return
+        self._known_files = known_files
+        self._on_questions_loaded(questions)
+
+    def _apply_questions_failed_if_current(
+        self,
+        session_serial: int,
+        error: str,
+    ) -> None:
+        if session_serial != self._session_serial:
+            return
+        self._on_questions_failed(error)
 
     def _on_questions_loaded(self, questions: list[InlineQuizQuestion]) -> None:
+        self._notify_inline_generation_finished()
         self.questions = questions
+        self.answers = {}
+        self.grades = []
+        self.grading_summary = {}
+        self.current_index = 0
         self._state = "answering"
         self._loading_progress_label = ""
         if self._animate_timer is not None:
             self._animate_timer.pause()
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
         self.query_one("#iq-code-file-label", Label).remove_class("-loading")
         self._build_q_nav()
         self._update_question_panel()
@@ -691,10 +816,13 @@ class InlineQuizWidget(Vertical):
         self._notify_app_controls_changed()
 
     def _on_questions_failed(self, error: str) -> None:
+        self._notify_inline_generation_finished()
         self._state = "answering"
         self._loading_progress_label = ""
         if self._animate_timer is not None:
             self._animate_timer.pause()
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
         self.query_one("#iq-code-file-label", Label).remove_class("-loading")
         friendly_error = error
         if "OPENAI_API_KEY" in error or "API key" in error:
@@ -713,10 +841,11 @@ class InlineQuizWidget(Vertical):
         nav.remove_children()
         self._nav_build_serial += 1
         for index, question in enumerate(self.questions):
+            answered = bool(self.answers.get(question["id"], "").strip())
             classes = "iq-q-btn" + (" iq-active" if index == self.current_index else "")
             nav.mount(
                 Button(
-                    str(index + 1),
+                    f"{index + 1}✓" if answered else str(index + 1),
                     id=f"iq-nav-{self._nav_build_serial}-{index}",
                     classes=classes,
                     compact=True,
@@ -731,10 +860,12 @@ class InlineQuizWidget(Vertical):
             if index >= len(buttons):
                 continue
             button = buttons[index]
+            answered = bool(self.answers.get(question["id"], "").strip())
+            button.label = f"{index + 1}✓" if answered else str(index + 1)
             button.remove_class("iq-active", "iq-answered")
             if index == self.current_index:
                 button.add_class("iq-active")
-            elif self.answers.get(question["id"], "").strip():
+            elif answered:
                 button.add_class("iq-answered")
 
     def _resolve_to_known(self, file_path: str, anchor_snippet: str) -> str:
@@ -784,7 +915,10 @@ class InlineQuizWidget(Vertical):
         self.query_one("#iq-question-text", Static).update(question["question"])
         answer_input = self.query_one("#iq-answer-input", TextArea)
         answer_input.text = self.answers.get(question["id"], "")
-        if focus_input:
+        answer_input.disabled = self._state in {"grading", "results"}
+        self.query_one("#iq-prev", Button).disabled = self.current_index <= 0
+        self.query_one("#iq-next", Button).disabled = self.current_index >= len(self.questions) - 1
+        if focus_input and not answer_input.disabled:
             answer_input.focus()
         self._refresh_q_nav_styles()
 
@@ -851,12 +985,15 @@ class InlineQuizWidget(Vertical):
             return
         question = self.questions[self.current_index]
         self.answers[question["id"]] = self.query_one("#iq-answer-input", TextArea).text
+        self._refresh_q_nav_styles()
 
     def _navigate_to(self, index: int) -> None:
         self._save_current_answer()
         self.current_index = max(0, min(index, len(self.questions) - 1))
         self._update_question_panel()
         self._update_code_panel()
+        if self._state == "results":
+            self._show_results()
 
     @on(Button.Pressed, "#iq-prev")
     def handle_prev(self) -> None:
@@ -866,15 +1003,49 @@ class InlineQuizWidget(Vertical):
     def handle_next(self) -> None:
         self._navigate_to(self.current_index + 1)
 
-    @on(Button.Pressed, "#iq-grade-btn")
+    @on(AnswerTextArea.Submit)
+    def handle_answer_input_submit(self, message: AnswerTextArea.Submit) -> None:
+        if message.answer_input is not self.query_one("#iq-answer-input", AnswerTextArea):
+            return
+        self._save_current_answer()
+        self._persist_state_to_app()
+
+    @on(AnswerTextArea.NavigatePrevious)
+    def handle_answer_input_previous(
+        self, message: AnswerTextArea.NavigatePrevious
+    ) -> None:
+        if message.answer_input is not self.query_one("#iq-answer-input", AnswerTextArea):
+            return
+        self._save_current_answer()
+        self._persist_state_to_app()
+        self._navigate_to(self.current_index - 1)
+
+    @on(AnswerTextArea.NavigateNext)
+    def handle_answer_input_next(self, message: AnswerTextArea.NavigateNext) -> None:
+        if message.answer_input is not self.query_one("#iq-answer-input", AnswerTextArea):
+            return
+        self._save_current_answer()
+        self._persist_state_to_app()
+        if self.current_index >= len(self.questions) - 1:
+            self.handle_grade()
+        else:
+            self._navigate_to(self.current_index + 1)
+
+    @on(TextArea.Changed, "#iq-answer-input")
+    def handle_answer_input_changed(self) -> None:
+        if not self.questions:
+            return
+        self._save_current_answer()
+        self._persist_state_to_app()
+
     def handle_grade(self) -> None:
         self._save_current_answer()
         self._state = "grading"
+        self._notify_inline_grading_started()
         self._anim_frame = 0
         if self._animate_timer is not None:
             self._animate_timer.reset()
             self._animate_timer.resume()
-        self.query_one("#iq-grade-btn", Button).disabled = True
         self._notify_app_controls_changed()
         self._do_grade()
 
@@ -913,6 +1084,9 @@ class InlineQuizWidget(Vertical):
 
     @work(thread=True)
     def _do_grade(self) -> None:
+        session_serial = self._session_serial
+        cache_key = self.cache_key
+        saved_state = self.get_saved_state()
         try:
             grades = None
             grading_summary: GradingSummary = {}
@@ -923,7 +1097,8 @@ class InlineQuizWidget(Vertical):
             ):
                 if event.get("type") == "node":
                     self.app.call_from_thread(
-                        self._set_grading_progress_node,
+                        self._set_grading_progress_if_current,
+                        session_serial,
                         str(event.get("label", "")),
                     )
                 elif event.get("type") == "result":
@@ -938,31 +1113,100 @@ class InlineQuizWidget(Vertical):
                 )
                 grades = result.get("final_grades", [])
                 grading_summary = dict(result.get("grading_summary", {}))
-            self.app.call_from_thread(self._on_grades_loaded, grades, grading_summary)
+            self.app.call_from_thread(
+                self._apply_grades_loaded_if_current,
+                session_serial,
+                cache_key,
+                saved_state,
+                grades,
+                grading_summary,
+            )
         except Exception as exc:
-            self.app.call_from_thread(self._on_grades_failed, str(exc))
+            self.app.call_from_thread(
+                self._apply_grades_failed_if_current,
+                session_serial,
+                cache_key,
+                str(exc),
+            )
+
+    def _set_grading_progress_if_current(self, session_serial: int, label: str) -> None:
+        if session_serial != self._session_serial:
+            return
+        self._set_grading_progress_node(label)
+
+    def _apply_grades_loaded_if_current(
+        self,
+        session_serial: int,
+        cache_key: str,
+        saved_state: InlineQuizSavedState,
+        grades: list[InlineQuizGrade],
+        grading_summary: GradingSummary | None = None,
+    ) -> None:
+        app = getattr(self, "app", None)
+        if app is not None and cache_key:
+            save_state = getattr(app, "save_inline_quiz_state", None)
+            if callable(save_state):
+                save_state(
+                    cache_key,
+                    InlineQuizSavedState(
+                        questions=list(saved_state["questions"]),
+                        answers=dict(saved_state["answers"]),
+                        grades=list(grades),
+                        current_index=saved_state["current_index"],
+                        known_files=dict(saved_state["known_files"]),
+                    ),
+                    grading_summary,
+                )
+        if session_serial != self._session_serial:
+            if app is not None and cache_key:
+                notify = getattr(app, "notify_inline_grade_finished", None)
+                if callable(notify):
+                    notify(cache_key)
+            return
+        self._on_grades_loaded(grades, grading_summary)
+
+    def _apply_grades_failed_if_current(
+        self,
+        session_serial: int,
+        cache_key: str,
+        error: str,
+    ) -> None:
+        if session_serial != self._session_serial:
+            app = getattr(self, "app", None)
+            if app is not None and cache_key:
+                notify = getattr(app, "notify_inline_grade_finished", None)
+                if callable(notify):
+                    notify(cache_key)
+            return
+        self._on_grades_failed(error)
 
     def _on_grades_loaded(
         self,
         grades: list[InlineQuizGrade],
         grading_summary: GradingSummary | None = None,
     ) -> None:
+        self._notify_inline_grading_finished()
         self.grades = grades
         self.grading_summary = grading_summary or {}
         self._state = "results"
         self._grading_progress_label = ""
         if self._animate_timer is not None:
             self._animate_timer.pause()
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
+        self._update_question_panel()
         self._show_results()
         self._persist_state_to_app()
         self._notify_app_controls_changed()
 
     def _on_grades_failed(self, error: str) -> None:
+        self._notify_inline_grading_finished()
         self._state = "answering"
         self._grading_progress_label = ""
         if self._animate_timer is not None:
             self._animate_timer.pause()
-        self.query_one("#iq-grade-btn", Button).disabled = False
+        self.query_one("#iq-header-status", Label).update("")
+        self.query_one("#iq-header-status", Label).remove_class("-loading")
         friendly_error = error
         if "OPENAI_API_KEY" in error or "API key" in error:
             friendly_error = (
@@ -979,29 +1223,39 @@ class InlineQuizWidget(Vertical):
             if self.grades
             else 0
         )
+        if not self.questions:
+            self.query_one("#iq-result-content", Static).update("")
+            self.query_one("#iq-answering-group", Vertical).display = False
+            self.query_one("#iq-results-group", Vertical).display = True
+            self.query_one("#iq-answer-input", TextArea).disabled = True
+            self._set_status("채점 결과가 없습니다.")
+            return
+
+        current_question = self.questions[self.current_index]
+        current_grade = grade_map.get(current_question["id"])
+        current_score = int(current_grade["score"]) if current_grade else 0
+        current_feedback = (
+            str(current_grade.get("feedback", "")).strip()
+            if current_grade is not None
+            else "채점 결과를 불러오지 못했습니다."
+        )
+        type_ko = QUESTION_TYPE_KO.get(
+            current_question["question_type"],
+            current_question["question_type"],
+        )
 
         result = Text()
-        result.append(f"평균 점수: {avg_score}점\n\n", style="bold bright_cyan")
+        result.append(self._score_gauge_text(current_score), style="green")
+        result.append(f"  {current_score}점\n\n", style="bold yellow")
+        result.append(current_feedback)
 
-        for question in self.questions:
-            grade = grade_map.get(question["id"])
-            score = grade["score"] if grade else 0
-            feedback = grade["feedback"] if grade else "-"
-            bar = "█" * (score // 10) + "░" * (10 - score // 10)
-            type_ko = QUESTION_TYPE_KO.get(
-                question["question_type"],
-                question["question_type"],
-            )
-
-            result.append(f"{question['id'].upper()}. [{type_ko}]\n", style="bold")
-            result.append(f"{question['question'][:80]}\n", style="dim")
-            result.append(bar, style="green")
-            result.append(f"  {score}점\n", style="bold yellow")
-            result.append(f"{feedback}\n\n")
-
+        self.query_one("#iq-results-title", Label).update(
+            f"채점 결과  [{self.current_index + 1}/{len(self.questions)}]  {type_ko}"
+        )
         self.query_one("#iq-result-content", Static).update(result)
-        self.query_one("#iq-answering-group", Vertical).display = False
+        self.query_one("#iq-answering-group", Vertical).display = True
         self.query_one("#iq-results-group", Vertical).display = True
+        self.query_one("#iq-answer-input", TextArea).disabled = True
         self._set_status(f"채점 완료! 평균 {avg_score}점.")
 
 
@@ -1014,7 +1268,7 @@ class InlineQuizDock(InlineQuizWidget):
         position: absolute;
         width: 100%;
         height: 1fr;
-        border: round $accent;
+        border: round #b88a3b;
         padding: 0 1;
         offset: 0 3;
         background: $surface;
