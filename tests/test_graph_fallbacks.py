@@ -17,6 +17,7 @@ from git_study.graphs.inline_quiz_graph import (
     route_after_inline_review,
     validate_anchor_candidates,
 )
+from git_study.tools.code_context import get_neighbor_code_context
 from git_study.graphs.commit_analysis_subgraph import analyze_change as analyze_commit_change
 from git_study.graphs.quiz_graph import (
     analyze_change,
@@ -196,6 +197,75 @@ def test_finalize_inline_questions_builds_default_question_when_generation_empty
     assert question["id"] == "q1"
     assert question["file_path"] == "src/a.py"
     assert "맡는 역할" in question["question"]
+
+
+def test_get_neighbor_code_context_returns_anchor_neighbors() -> None:
+    result = get_neighbor_code_context(
+        file_context_map={
+            "src/a.py": "def one():\n    pass\n\ndef two():\n    return 2\n\nvalue = two()\n"
+        },
+        file_path="src/a.py",
+        anchor_snippet="def two():\n    return 2",
+        before_lines=1,
+        after_lines=2,
+    )
+
+    assert "FILE: src/a.py" in result
+    assert "STATUS: ok" in result
+    assert "def two():" in result
+    assert "value = two()" in result
+
+
+def test_generate_inline_questions_uses_neighbor_context_tool(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class StubLLMClient:
+        def invoke_json_with_tools(self, prompt: str, tools, **kwargs):
+            captured["prompt"] = prompt
+            captured["tool_names"] = [getattr(tool, "name", "") for tool in tools]
+            captured["require_tool"] = kwargs.get("require_tool")
+            return [
+                {
+                    "id": "q1",
+                    "file_path": "src/a.py",
+                    "anchor_snippet": "def run():\n    return 1",
+                    "question": "질문",
+                    "expected_answer": "답변",
+                    "question_type": "intent",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "git_study.graphs.inline_quiz_graph.LLMClient",
+        StubLLMClient,
+    )
+
+    result = generate_inline_questions(
+        {
+            "count": 1,
+            "user_request": "",
+            "commit_context": {
+                "commit_sha": "abcdef1",
+                "commit_subject": "subject",
+                "diff_text": "diff --git a/src/a.py b/src/a.py",
+                "file_context_text": "FILE: src/a.py\n```python\ndef run():\n    return 1\n```",
+            },
+            "file_context_map": {"src/a.py": "def run():\n    return 1\n"},
+            "validated_anchors": [
+                {
+                    "file_path": "src/a.py",
+                    "anchor_snippet": "def run():\n    return 1",
+                    "question_type": "intent",
+                    "reason": "핵심",
+                }
+            ],
+        }
+    )
+
+    assert captured["tool_names"] == ["get_neighbor_code_context"]
+    assert captured["require_tool"] is True
+    assert "get_neighbor_code_context" in str(captured["prompt"])
+    assert result["inline_questions"][0]["id"] == "q1"
 
 
 def test_finalize_quiz_builds_missing_general_questions_from_analysis() -> None:
@@ -636,12 +706,13 @@ def test_extract_anchor_candidates_uses_structured_output(monkeypatch) -> None:
     assert "subject" in captured["prompt"]
 
 
-def test_generate_inline_questions_uses_structured_output(monkeypatch) -> None:
+def test_generate_inline_questions_uses_neighbor_context_tool(monkeypatch) -> None:
     captured: dict[str, str] = {}
 
     class StubLLMClient:
-        def invoke_structured(self, prompt: str, schema, **kwargs):
+        def invoke_json_with_tools(self, prompt: str, tools, **kwargs):
             captured["prompt"] = prompt
+            captured["tool_name"] = getattr(tools[0], "name", "")
             return [
                 {
                     "id": "q1",
@@ -678,6 +749,7 @@ def test_generate_inline_questions_uses_structured_output(monkeypatch) -> None:
 
     assert result["inline_questions"][0]["id"] == "q1"
     assert "개념 위주로 만들어줘" in captured["prompt"]
+    assert captured["tool_name"] == "get_neighbor_code_context"
 
 
 def test_review_inline_questions_uses_structured_output(monkeypatch) -> None:
@@ -732,8 +804,9 @@ def test_repair_inline_questions_uses_revision_instruction(monkeypatch) -> None:
     captured: dict[str, str] = {}
 
     class StubLLMClient:
-        def invoke_structured(self, prompt: str, schema, **kwargs):
+        def invoke_json_with_tools(self, prompt: str, tools, **kwargs):
             captured["prompt"] = prompt
+            captured["tool_name"] = getattr(tools[0], "name", "")
             return [
                 {
                     "id": "q1",
@@ -770,6 +843,7 @@ def test_repair_inline_questions_uses_revision_instruction(monkeypatch) -> None:
     )
 
     assert "질문을 더 깊게 만들어줘" in captured["prompt"]
+    assert captured["tool_name"] == "get_neighbor_code_context"
     assert result["inline_questions"][0]["question"] == "수정된 질문"
     assert result["repair_attempts"] == 1
 

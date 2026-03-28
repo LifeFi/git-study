@@ -137,3 +137,46 @@ def test_invoke_structured_tries_relaxed_structured_before_json(monkeypatch) -> 
 
     assert result == {"ok": True}
     assert calls == [True, True, False]
+
+
+def test_invoke_json_with_tools_executes_tool_call() -> None:
+    client = object.__new__(LLMClient)
+    invocations: list[list[object]] = []
+
+    class StubResponse:
+        def __init__(self, content: str, tool_calls=None):
+            self.content = content
+            self.tool_calls = tool_calls or []
+
+    class StubBoundLLM:
+        def invoke(self, messages):
+            invocations.append(list(messages))
+            if len(invocations) == 1:
+                return StubResponse(
+                    "",
+                    [
+                        {
+                            "id": "call-1",
+                            "name": "get_neighbor_code_context",
+                            "args": {"file_path": "src/a.py", "anchor_snippet": "def run()"},
+                        }
+                    ],
+                )
+            return StubResponse('{"ok": true}')
+
+    class StubLLM:
+        def bind_tools(self, tools):
+            return StubBoundLLM()
+
+    class StubTool:
+        name = "get_neighbor_code_context"
+
+        def invoke(self, args):
+            return "FILE: src/a.py\nSTATUS: ok\nLINES: 1-3\n```text\ndef run():\n    return 1\n```"
+
+    client._llm = StubLLM()
+
+    result = client.invoke_json_with_tools("prompt", [StubTool()], require_tool=True)
+
+    assert result == {"ok": True}
+    assert len(invocations) == 2

@@ -18,6 +18,7 @@ from ..llm.schemas import (
 from ..prompts.inline_anchor import build_inline_anchor_prompt
 from ..prompts.inline_question import build_inline_question_prompt
 from ..prompts.inline_question_review import build_inline_question_review_prompt
+from ..tools.code_context import build_get_neighbor_code_context_tool
 from ..types import InlineQuizQuestion
 
 
@@ -64,6 +65,15 @@ class InlineQuestionReviewStructuredOutput(BaseModel):
     is_valid: bool = Field(default=False)
     issues: list[str] = Field(default_factory=list)
     revision_instruction: str = Field(default="")
+
+
+TOOL_USAGE_SUFFIX = """
+
+Tooling:
+- You have access to `get_neighbor_code_context`.
+- Before returning the final JSON, call `get_neighbor_code_context` at least once for one of the validated anchors.
+- Use the returned neighboring code only to improve reasoning quality. Final `file_path` and `anchor_snippet` must still match the validated anchors exactly.
+""".strip()
 
 
 def prepare_inline_context(state: InlineQuizGraphState) -> InlineQuizGraphState:
@@ -167,9 +177,11 @@ def generate_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
         count=count,
         user_request=str(state.get("user_request", "")).strip(),
     )
-    items_payload = LLMClient().invoke_structured(
-        prompt,
-        InlineQuestionListStructuredOutput,
+    tool = build_get_neighbor_code_context_tool(state.get("file_context_map", {}))
+    items_payload = LLMClient().invoke_json_with_tools(
+        f"{prompt}\n\n{TOOL_USAGE_SUFFIX}",
+        [tool],
+        require_tool=True,
     )
     items = normalize_inline_questions(
         items_payload.model_dump()
@@ -249,9 +261,11 @@ def repair_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState
         + "\n\nAdditional revision instruction:\n"
         + str(state.get("inline_review", {}).get("revision_instruction", "")).strip()
     )
-    items_payload = LLMClient().invoke_structured(
-        repaired_prompt,
-        InlineQuestionListStructuredOutput,
+    tool = build_get_neighbor_code_context_tool(state.get("file_context_map", {}))
+    items_payload = LLMClient().invoke_json_with_tools(
+        f"{repaired_prompt}\n\n{TOOL_USAGE_SUFFIX}",
+        [tool],
+        require_tool=True,
     )
     items = normalize_inline_questions(
         items_payload.model_dump()

@@ -1,6 +1,6 @@
 # git-study
 
-![git-study inline quiz](assets/inline-quiz-soft.svg)
+![git-study inline quiz](assets/screenshot-20260328.png)
 
 `git-study`는 Git 커밋을 읽어 코드 변경의 의도와 흐름을 퀴즈로 바꿔주는 터미널 학습 도구입니다.
 
@@ -97,9 +97,10 @@ OPENAI_API_KEY=...
 1. `git-study`를 실행합니다.
 2. `Local` 또는 `GitHub`를 선택합니다.
 3. 커밋을 고릅니다.
-4. `Session`의 `Gen`으로 `Read`, `Quiz`, `Inline` 흐름을 시작합니다.
-5. 각 탭에서 일반 퀴즈와 인라인 퀴즈를 풀고 채점합니다.
-6. 필요하면 `Code`로 코드 브라우저를 열어 변경 내용을 함께 봅니다.
+4. `Home`에서 `Setup ⧉`를 열어 commit mode, 난이도, 스타일, 추가 요청을 확인합니다.
+5. `Gen All` 또는 각 탭의 `Gen Read`, `Gen Basic`, `Gen Inline`으로 생성 흐름을 시작합니다.
+6. `Read`, `Basic`, `Inline`, `Review` 탭을 오가며 학습하고 채점합니다.
+7. 필요하면 `Sessions ⧉`로 저장된 세션을 다시 열고, `Code`로 코드 브라우저를 함께 봅니다.
 
 ## 주요 기능
 
@@ -109,12 +110,21 @@ OPENAI_API_KEY=...
 - 난이도: `Easy`, `Medium`, `Hard`
 - 스타일: `Mixed`, `Study Session`, `Multiple Choice`, `Short Answer`, `Conceptual`
 - 세션 안에서 답변을 저장하고 채점할 수 있습니다.
+- 문제 번호 버튼으로 바로 이동할 수 있고, 답변이 있으면 번호에 체크가 표시됩니다.
+- 채점 후에는 문제별 점수 게이지와 피드백을 확인할 수 있습니다.
 
 ### 인라인 퀴즈
 
 - 변경 파일의 실제 코드 위치에 앵커된 질문을 생성합니다.
 - 질문 유형은 `intent`, `behavior`, `tradeoff`, `vulnerability`를 고르게 사용합니다.
 - 답안을 입력하고 바로 채점할 수 있습니다.
+- `Basic`과 비슷한 문제 탐색 UI를 제공하며, 현재 문제 기준 채점 결과를 확인할 수 있습니다.
+
+### 세션과 설정
+
+- `Setup ⧉`는 오버레이로 열리며 commit mode, 난이도, 퀴즈 스타일, 추가 요청을 관리합니다.
+- `Sessions ⧉`에서 저장된 학습 세션을 다시 열거나 정리할 수 있습니다.
+- `Home`은 전체 진입점이며, 세션 상태와 생성 버튼을 한곳에서 다룹니다.
 
 ### 코드 브라우저
 
@@ -150,6 +160,11 @@ OPENAI_API_KEY=...
 - `q`: 종료
 - `Ctrl+C`: 짧은 시간 안에 두 번 눌러 종료
 - 인라인 퀴즈 화면: `Esc`, `Left/Right`, `h/l`
+- 답변 입력:
+  - `Enter`: 줄바꿈
+  - `Shift+Enter`: 입력 종료, 저장, 포커스 해제
+  - `Ctrl+Enter`: 다음 문제로 이동, 마지막 문제에서는 채점 실행
+  - `Shift+Ctrl+Enter`: 이전 문제로 이동
 
 ## 개발 메모
 
@@ -159,13 +174,89 @@ LangGraph 개발 서버 실행:
 UV_CACHE_DIR=/tmp/uv-cache uv run langgraph dev
 ```
 
-현재 주요 graph는 다음과 같습니다.
+## Graphs
+
+이 프로젝트의 LangGraph는 agent tool loop보다는, 고정된 노드와 review 단계의 조건 분기를 조합한 형태입니다.
+
+### 공통 분석 subgraph
+
+- `commit_analysis_subgraph_v1`
+  - `resolve_commit_context -> analyze_change`
+  - `Read`와 `Basic` 생성이 공통으로 쓰는 커밋 분석 subgraph입니다.
+  - 텍스트 diff가 없으면 여기서 바로 fallback 메시지를 만들 수 있습니다.
+
+### 읽을거리 생성 graph
+
+- `commit_diff_reading_v1`
+  - `resolve_commit_context -> analyze_change -> draft_reading -> review_reading`
+  - review 결과에 따라 `repair_reading` 또는 `finalize_reading`으로 갑니다.
+  - 최대 1회 repair 후 finalize 합니다.
+
+### 일반 퀴즈 생성 graph
+
+- `commit_diff_quiz_v2`
+  - `resolve_commit_context -> analyze_change -> draft_quiz -> review_quiz`
+  - review 결과에 따라 `repair_quiz` 또는 `finalize_quiz`로 갑니다.
+  - 질문 생성과 review는 structured output을 사용합니다.
+
+### 인라인 퀴즈 생성 graph
+
+- `inline_quiz_questions_v2`
+  - `prepare_inline_context -> extract_anchor_candidates -> validate_anchor_candidates -> generate_inline_questions -> review_inline_questions`
+  - review 결과에 따라 `repair_inline_questions` 또는 `finalize_inline_questions`으로 갑니다.
+  - 실제 파일 내용과 snippet을 대조해 앵커를 검증합니다.
+
+### 채점 graph
+
+- `general_quiz_grading_v1`
+  - `prepare_grading_payload -> grade_answers -> validate_grades -> finalize_grades`
+- `inline_quiz_grading_v2`
+  - `prepare_grading_payload -> grade_answers -> validate_grades -> finalize_grades`
+
+두 채점 graph 모두 생성 결과와 review 결과를 함께 사용해 최종 점수와 피드백을 정리합니다.
+
+## Tools
+
+현재 프로젝트에는 최소 1개의 실제 tool 연동이 들어 있습니다.
+
+### `get_neighbor_code_context`
+
+- 위치: `src/git_study/tools/code_context.py`
+- 역할:
+  - 특정 `file_path`와 `anchor_snippet`을 받아
+  - 그 주변 코드 몇 줄을 잘라서 반환합니다.
+- 주 사용처:
+  - 인라인 퀴즈 질문 생성
+  - 인라인 퀴즈 질문 repair
+
+이 tool은 인라인 질문을 만들 때 anchor 자체만 보지 않고, 주변 코드 문맥까지 좁게 다시 확인하도록 돕습니다.
+
+입력 예:
+
+- `file_path`
+- `anchor_snippet`
+- `before_lines`
+- `after_lines`
+
+출력 예:
+
+- `FILE`
+- `STATUS`
+- `LINES`
+- 코드 블록
+
+현재 앱 코드에서는 `inline_quiz_graph`가 이 tool을 바인딩해서, 모델이 최소 1회 `get_neighbor_code_context`를 호출한 뒤 최종 JSON 질문 목록을 반환하도록 구성되어 있습니다.
+
+참고로 실제 제품 graph는 내부 LLM tool loop를 사용하고, 노트북에는 구조 설명용 `ToolNode` 데모 graph를 별도로 렌더링합니다.
+
+### 현재 등록된 주요 graph 이름
 
 - `commit_diff_reading_v1`: 읽을거리 생성
 - `commit_diff_quiz_v2`: 일반 퀴즈 생성
 - `general_quiz_grading_v1`: 일반 퀴즈 채점
 - `inline_quiz_questions_v2`: 인라인 퀴즈 질문 생성
 - `inline_quiz_grading_v2`: 인라인 퀴즈 채점
+- `commit_analysis_subgraph_v1`: 공통 커밋 분석
 
 실제 구조는 `domain/`, `graphs/`, `prompts/`, `services/`, `llm/`, `types.py`로 나뉘어 있습니다.
 

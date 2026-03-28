@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from ..secrets import get_openai_api_key
 from ..settings import DEFAULT_MODEL, load_settings
@@ -59,6 +60,77 @@ class LLMClient:
                 "LLM이 JSON 응답 대신 비어 있거나 파싱할 수 없는 텍스트를 반환했습니다. "
                 f"response_preview={preview}"
             ) from exc
+
+    def invoke_json_with_tools(
+        self,
+        prompt: str,
+        tools: list[Any],
+        *,
+        require_tool: bool = False,
+        max_rounds: int = 4,
+    ) -> Any:
+        messages = [HumanMessage(content=prompt)]
+        tool_by_name = {
+            str(getattr(tool, "name", "")): tool for tool in tools if getattr(tool, "name", "")
+        }
+        bound_llm = self._llm.bind_tools(tools)
+        tool_called = False
+        reminder_sent = False
+
+        for _ in range(max_rounds):
+            response = bound_llm.invoke(messages)
+            messages.append(response)
+            tool_calls = list(getattr(response, "tool_calls", []) or [])
+
+            if tool_calls:
+                tool_called = True
+                for call in tool_calls:
+                    tool_name = str(call.get("name", "")).strip()
+                    tool_call_id = str(call.get("id", "")).strip()
+                    tool_args = call.get("args", {})
+                    tool = tool_by_name.get(tool_name)
+                    if tool is None:
+                        result = f"Tool '{tool_name}' is not available."
+                    else:
+                        try:
+                            result = tool.invoke(tool_args)
+                        except Exception as exc:
+                            result = f"Tool '{tool_name}' failed: {exc}"
+                    messages.append(
+                        ToolMessage(
+                            content=str(result),
+                            tool_call_id=tool_call_id,
+                            name=tool_name or None,
+                        )
+                    )
+                continue
+
+            if require_tool and not tool_called and not reminder_sent:
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "You must call the get_neighbor_code_context tool at least once "
+                            "before returning the final JSON response."
+                        )
+                    )
+                )
+                reminder_sent = True
+                continue
+
+            raw = str(response.content)
+            extracted = extract_json_block(raw)
+            try:
+                return json.loads(extracted)
+            except json.JSONDecodeError as exc:
+                preview = " ".join(raw.split())[:160]
+                if not preview:
+                    preview = "<empty>"
+                raise ValueError(
+                    "LLM이 tool 호출 후 JSON 응답 대신 비어 있거나 파싱할 수 없는 텍스트를 반환했습니다. "
+                    f"response_preview={preview}"
+                ) from exc
+
+        raise ValueError("LLM tool 호출이 반복되어 종료되지 않았습니다.")
 
     def invoke_structured(
         self,
