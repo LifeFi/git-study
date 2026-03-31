@@ -265,17 +265,16 @@ class GitStudyAppV2(App):
                 repo_source=self._repo_source,
                 refresh_remote=False,
             )
-            commits = snapshot.get("commits", [])
+            fresh_commits = snapshot.get("commits", [])
         except Exception as exc:
             self.call_from_thread(self._set_status, f"커밋 갱신 실패: {exc}")
-            commits = self._commits  # 기존 목록으로 fallback
+            fresh_commits = []
 
-        if commits:
-            self._commits = commits
+        self.call_from_thread(self._do_open_picker, fresh_commits)
 
-        self.call_from_thread(self._do_open_picker)
-
-    def _do_open_picker(self) -> None:
+    def _do_open_picker(self, fresh_commits: list[dict]) -> None:
+        if fresh_commits:
+            self._commits = fresh_commits  # 메인 스레드에서 reactive 업데이트
         if not self._commits:
             self._set_status("커밋 목록이 없습니다.")
             return
