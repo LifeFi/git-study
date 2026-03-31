@@ -198,6 +198,8 @@ class GitStudyAppV2(App):
                 self._open_commit_picker()
             case "answer":
                 self._resume_answer_mode()
+            case "exit":
+                self.exit()
             case _:
                 self._set_status(f"알 수 없는 명령: {cmd.raw}")
 
@@ -332,6 +334,12 @@ class GitStudyAppV2(App):
 
     def _on_commit_picker_result(self, result: CommitSelection | None) -> None:
         if result is None:
+            self._set_status(
+                f"커밋 범위: {self._oldest_sha[:7]}..{self._newest_sha[:7]}  |  "
+                "/quiz 로 퀴즈 생성, /commits 로 커밋 선택."
+                if self._oldest_sha and self._newest_sha
+                else "명령어를 입력하세요: /quiz, /grade, /help"
+            )
             return
         if result.start_index is None:
             self._set_status("커밋이 선택되지 않았습니다.")
@@ -448,12 +456,15 @@ class GitStudyAppV2(App):
             self.call_from_thread(self._set_status, "퀴즈 질문이 생성되지 않았습니다.")
             return
 
-        # Also fetch file contents from git for files referenced in questions
+        # git에서 전체 파일 내용을 가져와 known_files 보강/덮어쓰기
+        # (parse_file_context_blocks는 3000자 잘림 콘텐츠를 반환할 수 있음)
         try:
+            from ..domain.code_context import get_file_content_at_commit_or_empty
+            seen: set[str] = set()
             for q in questions:
                 fpath = q.get("file_path", "")
-                if fpath and fpath not in known_files:
-                    from ..domain.code_context import get_file_content_at_commit_or_empty
+                if fpath and fpath not in seen:
+                    seen.add(fpath)
                     content = get_file_content_at_commit_or_empty(repo, newest_sha, fpath)
                     if content:
                         known_files[fpath] = content

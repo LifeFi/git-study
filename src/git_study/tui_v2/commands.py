@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-CommandKind = Literal["quiz", "grade", "help", "commits", "answer", "unknown"]
+CommandKind = Literal["quiz", "grade", "help", "commits", "answer", "exit", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -38,4 +38,6 @@ def parse_command(text: str) -> ParsedCommand:
         return ParsedCommand(kind="commits", raw=text)
     if text.startswith("/answer"):
         return ParsedCommand(kind="answer", raw=text)
+    if text in ("/exit", "/quit"):
+        return ParsedCommand(kind="exit", raw=text)
     return ParsedCommand(kind="unknown", raw=text)

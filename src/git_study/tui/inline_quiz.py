@@ -49,7 +49,32 @@ QUESTION_TYPE_KO = {
 
 
 def find_anchor_line(file_content: str, anchor_snippet: str) -> int | None:
-    """anchor_snippet이 파일 내 몇 번째 줄에서 시작하는지 반환 (1-based)."""
+    """anchor_snippet이 파일 내 몇 번째 줄에서 시작하는지 반환 (1-based).
+
+    validate_anchor_candidates와 동일한 정규화(rstrip)를 사용하여
+    부분 문자열 위치를 찾고 라인 번호로 변환한다.
+    """
+    if not file_content or not anchor_snippet:
+        return None
+
+    from ..domain.inline_anchor import normalize_anchor_snippet
+
+    norm_content = normalize_anchor_snippet(file_content)
+    norm_snippet = normalize_anchor_snippet(anchor_snippet)
+    if not norm_snippet:
+        return None
+
+    pos = norm_content.find(norm_snippet)
+    if pos == -1:
+        # Fallback: 각 줄을 strip하여 느슨하게 매칭
+        return _find_anchor_line_loose(file_content, anchor_snippet)
+
+    # 부분 문자열 위치 → 라인 번호 (1-based)
+    return norm_content[:pos].count("\n") + 1
+
+
+def _find_anchor_line_loose(file_content: str, anchor_snippet: str) -> int | None:
+    """Fallback: 각 줄을 strip하여 느슨하게 매칭. 빈 줄은 건너뛴다."""
     file_lines = file_content.splitlines()
     snippet_lines = [line for line in anchor_snippet.strip().splitlines() if line.strip()]
     if not snippet_lines:
@@ -59,14 +84,23 @@ def find_anchor_line(file_content: str, anchor_snippet: str) -> int | None:
     for index, file_line in enumerate(file_lines):
         if first not in file_line.strip() and not file_line.strip().startswith(first[:30]):
             continue
+        if len(snippet_lines) == 1:
+            return index + 1
+        # 빈 줄을 건너뛰면서 나머지 snippet 줄 매칭
         matched = True
-        for offset, snippet_line in enumerate(snippet_lines[1:], 1):
-            if index + offset >= len(file_lines):
+        snippet_idx = 1
+        scan = index + 1
+        while snippet_idx < len(snippet_lines) and scan < len(file_lines):
+            if not file_lines[scan].strip():
+                scan += 1
+                continue
+            if snippet_lines[snippet_idx].strip() not in file_lines[scan] and not file_lines[scan].strip().startswith(snippet_lines[snippet_idx].strip()[:30]):
                 matched = False
                 break
-            if snippet_line.strip() not in file_lines[index + offset]:
-                matched = False
-                break
+            snippet_idx += 1
+            scan += 1
+        if snippet_idx < len(snippet_lines):
+            matched = False
         if matched:
             return index + 1
     return None

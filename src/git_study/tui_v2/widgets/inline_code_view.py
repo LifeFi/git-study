@@ -306,6 +306,42 @@ def build_claude_diff_lines(
     return result
 
 
+def _build_target_to_render_map(base_content: str, target_content: str) -> dict[int, int]:
+    """Return mapping: target line number (1-based) -> render_lines index (0-based).
+
+    Deleted base lines occupy render_lines slots but have no target line number,
+    so they are skipped in the mapping.
+    """
+    base_lines = base_content.splitlines()
+    target_lines = target_content.splitlines()
+    matcher = SequenceMatcher(a=base_lines, b=target_lines, autojunk=False)
+    result: dict[int, int] = {}
+    render_idx = 0
+    target_line = 1  # 1-based
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for _ in range(j2 - j1):
+                result[target_line] = render_idx
+                target_line += 1
+                render_idx += 1
+        elif tag == "insert":
+            for _ in range(j2 - j1):
+                result[target_line] = render_idx
+                target_line += 1
+                render_idx += 1
+        elif tag == "delete":
+            render_idx += i2 - i1  # deleted rows consume render slots, no target line
+        elif tag == "replace":
+            render_idx += i2 - i1  # deleted rows first
+            for _ in range(j2 - j1):
+                result[target_line] = render_idx
+                target_line += 1
+                render_idx += 1
+
+    return result
+
+
 def _plain_line(line_no: int, content: Text) -> Text:
     """번호 붙은 일반 코드 줄 (diff 없음)."""
     t = _build_line(line_no, line_no, " ", content)
@@ -924,14 +960,17 @@ class InlineCodeView(Widget):
         # Build Claude Code-style diff lines for segment slicing
         if base_content:
             render_lines = build_claude_diff_lines(language, base_content, target_content)
+            # target line (1-based) -> render_lines index (0-based) mapping
+            target_to_render = _build_target_to_render_map(base_content, target_content)
         else:
             highlighted_lines_plain = highlight_code_lines(target_content, language)
             render_lines = [
                 _plain_line(ln, hl)
                 for ln, hl in enumerate(highlighted_lines_plain, start=1)
             ]
+            # No diff: 1:1 mapping (target line N -> index N-1)
+            target_to_render = {i + 1: i for i in range(len(render_lines))}
 
-        # For anchor-line matching, count by *target* lines
         total_lines = len(render_lines)
 
         # Collect questions for this file with their anchor lines
@@ -974,11 +1013,12 @@ class InlineCodeView(Widget):
         widgets_to_mount: list[Widget] = []
 
         for anchor_line, global_idx, q in file_questions:
-            seg_start = prev_line  # 0-indexed
-            seg_end = min(anchor_line, total_lines)  # anchor_line is 1-based
+            # anchor_line is a target line number (1-based); convert to render_lines index
+            render_anchor = target_to_render.get(anchor_line, anchor_line - 1)
+            seg_end = min(render_anchor + 1, total_lines)  # inclusive of anchor line
 
-            if seg_end > seg_start:
-                code_text = _join_lines(render_lines[seg_start:seg_end])
+            if seg_end > prev_line:
+                code_text = _join_lines(render_lines[prev_line:seg_end])
                 widgets_to_mount.append(Static(code_text, classes="code-segment"))
 
             # Quiz block

@@ -11,13 +11,14 @@ from textual.widgets import Input, Static, TextArea
 
 # (command, description) — autocomplete candidates
 _COMMANDS: list[tuple[str, str]] = [
+    ("/commits", "커밋 범위 선택"),
     ("/quiz", "퀴즈 생성 (현재 범위)"),
     ("/quiz HEAD", "HEAD 커밋 퀴즈"),
     ("/quiz HEAD~3", "최근 4개 커밋 퀴즈"),
-    ("/grade", "채점"),
-    ("/commits", "커밋 범위 선택"),
+    ("/quiz HEAD~1..HEAD~4", "범위 지정 퀴즈"),
     ("/answer", "답변 재진입"),
     ("/help", "도움말"),
+    ("/exit", "종료"),
 ]
 
 
@@ -335,10 +336,19 @@ class CommandBar(Widget):
                     inp = self.query_one("#cb-input", Input)
                     inp.value = cmd
                     inp.cursor_position = len(cmd)
+                    event.stop()
+                    event.prevent_default()
+                else:
+                    # autocomplete 없으면 Tab으로 포커스 이동
+                    self.app.action_focus_next()
+                    event.stop()
+                    event.prevent_default()
+        elif self.mode == "answer":
+            if event.key == "tab":
+                self.app.action_focus_next()
                 event.stop()
                 event.prevent_default()
-        elif self.mode == "answer":
-            if event.key == "shift+enter":
+            elif event.key == "shift+enter":
                 answer = self.get_current_answer().strip()
                 if answer:
                     self.clear_input()

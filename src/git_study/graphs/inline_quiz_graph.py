@@ -111,9 +111,51 @@ def extract_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphSta
     return {"anchor_candidates": anchor_candidates}
 
 
+def _extract_diff_code_lines(diff_text: str, file_path: str) -> str:
+    """diff_text에서 특정 파일의 코드 라인만 추출 (+/- 접두사 제거)."""
+    lines: list[str] = []
+    in_file = False
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            in_file = file_path in line
+            continue
+        if not in_file:
+            continue
+        if line.startswith("@@"):
+            continue
+        if line.startswith(("---", "+++")):
+            continue
+        if line.startswith(("+", "-", " ")):
+            lines.append(line[1:])  # 접두사 제거
+        elif not line.startswith("\\"):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _snippet_exists_in_any(sources: list[str], snippet: str) -> bool:
+    """여러 소스 중 하나에서라도 snippet이 존재하면 True."""
+    snippet_lines = [l.strip() for l in snippet.splitlines() if l.strip()]
+    if not snippet_lines:
+        return False
+    snippet_joined = "\n".join(snippet_lines)
+
+    for source in sources:
+        if not source:
+            continue
+        # 정확한 매칭
+        if snippet_exists_in_content(source, snippet):
+            return True
+        # 느슨한 매칭 (빈 줄/공백 차이 허용)
+        source_lines = [l.strip() for l in source.splitlines() if l.strip()]
+        if snippet_joined in "\n".join(source_lines):
+            return True
+    return False
+
+
 def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphState:
     actual_paths = set(state.get("actual_paths", []))
     file_context_map = state.get("file_context_map", {})
+    diff_text = state.get("commit_context", {}).get("diff_text", "")
     validated: list[dict[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
 
@@ -124,8 +166,10 @@ def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphSt
         reason = str(candidate.get("reason", "")).strip()
         if file_path not in actual_paths:
             continue
+        # file_context_map(잘림 가능) + diff 코드 라인 모두에서 검증
         content = file_context_map.get(file_path, "")
-        if not content or not snippet_exists_in_content(content, anchor_snippet):
+        diff_code = _extract_diff_code_lines(diff_text, file_path)
+        if not _snippet_exists_in_any([content, diff_code], anchor_snippet):
             continue
         pair = (file_path, anchor_snippet)
         if pair in seen_pairs:
@@ -145,10 +189,10 @@ def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphSt
     if not validated:
         for file_path in state.get("actual_paths", []):
             content = file_context_map.get(file_path, "")
-            lines = [line for line in content.splitlines() if line.strip()]
-            if len(lines) < 3:
+            all_lines = content.splitlines()
+            if len(all_lines) < 3:
                 continue
-            snippet = "\n".join(lines[: min(5, len(lines))])
+            snippet = "\n".join(all_lines[: min(5, len(all_lines))])
             validated.append(
                 {
                     "file_path": file_path,

@@ -13,12 +13,25 @@ def extract_file_paths_from_summary(changed_files_summary: str) -> list[str]:
 
 def parse_file_context_blocks(file_context_text: str) -> dict[str, str]:
     blocks: dict[str, str] = {}
-    pattern = re.compile(
-        r"FILE:\s+(?P<path>[^\n]+)\n```[^\n]*\n(?P<content>[\s\S]*?)\n```"
-    )
-    for match in pattern.finditer(file_context_text):
-        path = match.group("path").strip()
-        content = match.group("content")
+    # FILE: 줄 기준으로 세그먼트 분리
+    segments = re.split(r"(?=^FILE:\s+)", file_context_text, flags=re.MULTILINE)
+    for segment in segments:
+        m = re.match(r"FILE:\s+(?P<path>[^\n]+)\n```[^\n]*\n", segment)
+        if not m:
+            continue
+        path = m.group("path").strip()
+        rest = segment[m.end():]
+        # 세그먼트 내 마지막 ``` 줄을 닫는 펜스로 사용 (중첩 펜스 대응)
+        lines = rest.split("\n")
+        closing_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip() == "```":
+                closing_idx = i
+                break
+        if closing_idx is not None:
+            content = "\n".join(lines[:closing_idx])
+        else:
+            content = rest.rstrip()
         if path and content:
             blocks[path] = content
     return blocks
