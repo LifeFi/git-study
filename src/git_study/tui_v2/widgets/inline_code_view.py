@@ -62,10 +62,6 @@ def build_claude_diff(
     # --- Pass 1: collect rows as (marker, Text) to find max plain width ---
     rows: list[tuple[str, str, Text]] = []  # (kind, hunk_header_or_empty, line_text)
 
-    header_text = Text(no_wrap=True)
-    header_text.append(f"--- a/{path}\n", style="red")
-    header_text.append(f"+++ b/{path}\n", style="green")
-
     for hunk in hunks:
         old_start, old_count, new_start, new_count, ops = hunk
         hunk_hdr = Text(no_wrap=True)
@@ -95,8 +91,6 @@ def build_claude_diff(
     max_width = max(max_width, 40)  # minimum visual width
 
     rendered = Text(no_wrap=True)
-    rendered.append_text(header_text)
-
     for marker, _, line_text in rows:
         if marker in ("+", "-"):
             rendered.append_text(_pad_row(line_text, max_width, marker))
@@ -119,18 +113,19 @@ def _build_line(
     content: Text,
 ) -> Text:
     """Build a single diff row Text (without padding)."""
-    old_str = f"{old_no:4}" if old_no is not None else "    "
-    new_str = f"{new_no:4}" if new_no is not None else "    "
+    # Show only one line number: old_no for deleted lines, new_no otherwise.
+    display_no = old_no if marker == "-" else new_no
+    num_str = f"{display_no:4}" if display_no is not None else "    "
 
     if marker == "+":
         row_bg = "on color(22)"
         marker_style = f"bold bright_green {row_bg}"
-        num_style = row_bg                            # bright (no dim) on green bg
+        num_style = row_bg
         content_style = row_bg
     elif marker == "-":
         row_bg = "on color(52)"
         marker_style = f"bold bright_red {row_bg}"
-        num_style = row_bg                            # bright (no dim) on red bg
+        num_style = row_bg
         content_style = row_bg
     else:
         row_bg = None
@@ -139,8 +134,7 @@ def _build_line(
         content_style = None
 
     t = Text(no_wrap=True)
-    t.append(f"{old_str} ", style=num_style)
-    t.append(f"{new_str} ", style=num_style)
+    t.append(f"{num_str} ", style=num_style)
     t.append(f"{marker} ", style=marker_style)
     if content_style:
         tinted = content.copy()
@@ -310,6 +304,13 @@ def build_claude_diff_lines(
             result.append(t)
 
     return result
+
+
+def _plain_line(line_no: int, content: Text) -> Text:
+    """번호 붙은 일반 코드 줄 (diff 없음)."""
+    t = _build_line(line_no, line_no, " ", content)
+    t.append("\n")
+    return t
 
 
 def _join_lines(lines: list[Text]) -> Text:
@@ -871,11 +872,7 @@ class InlineCodeView(Widget):
         """Render a file with or without quiz blocks depending on state."""
         self.current_file_path = path
         language = detect_code_language(path) or "text"
-        changed_label = "changed" if path in self.changed_paths else "unchanged"
-        base_sha = self.base_commit_sha[:7] if self.base_commit_sha else "—"
-        self.query_one("#cv-file-label", Label).update(
-            f"{path}  |  {language}  |  {base_sha}→{self.newest_commit_sha[:7]}  |  {changed_label}"
-        )
+        self.query_one("#cv-file-label", Label).update(f"{path}  |  {language}")
         if self._questions:
             self._render_code_with_quiz(path)
         else:
@@ -902,8 +899,7 @@ class InlineCodeView(Widget):
             highlighted_lines = highlight_code_lines(target_content, language)
             rendered = Text(no_wrap=True)
             for line_no, line in enumerate(highlighted_lines, start=1):
-                rendered.append(f"{'':4} {line_no:4} ", style="dim")
-                rendered.append("  ")
+                rendered.append(f"{line_no:4}   ", style="dim")
                 rendered.append_text(line)
                 rendered.append("\n")
             if not rendered.plain.strip():

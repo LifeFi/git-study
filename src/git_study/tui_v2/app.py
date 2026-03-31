@@ -32,6 +32,7 @@ from ..types import InlineQuizGrade, InlineQuizQuestion
 
 from .commands import parse_command
 from .screens import CommitPickerScreen
+from .widgets.app_status_bar import AppStatusBar
 from .widgets.command_bar import CommandBar
 from .widgets.inline_code_view import InlineCodeView
 
@@ -86,6 +87,7 @@ class GitStudyAppV2(App):
         with Horizontal(id="main"):
             yield InlineCodeView(id="code-view")
         yield CommandBar(id="cmd-bar")
+        yield AppStatusBar(id="app-status")
 
     def on_mount(self) -> None:
         self._load_local_repo()
@@ -157,6 +159,20 @@ class GitStudyAppV2(App):
             newest_commit_sha=self._newest_sha,
         )
 
+        # Update AppStatusBar repo name and initial range
+        try:
+            status_bar = self.query_one("#app-status", AppStatusBar)
+            if self._local_repo_root is not None:
+                status_bar.set_repo(self._local_repo_root.name)
+            if self._oldest_sha and self._newest_sha:
+                sha_index = {c.get("sha", ""): i for i, c in enumerate(commits)}
+                o_idx = sha_index.get(self._oldest_sha, 0)
+                n_idx = sha_index.get(self._newest_sha, 0)
+                count = abs(o_idx - n_idx) + 1
+                status_bar.set_range(self._oldest_sha, self._newest_sha, count)
+        except Exception:
+            pass
+
         # Phase 4: restore quiz session if exists for this range
         session_restored = self._try_restore_session()
         if not session_restored:
@@ -206,12 +222,22 @@ class GitStudyAppV2(App):
             self._current_q_index += 1
             code_view.activate_question(self._current_q_index)
             self._update_answer_status()
+            try:
+                self.query_one("#app-status", AppStatusBar).set_quiz_progress(
+                    self._current_q_index + 1, len(self._questions)
+                )
+            except Exception:
+                pass
         else:
             # All questions answered
             cmd_bar = self.query_one("#cmd-bar", CommandBar)
             cmd_bar.set_command_mode()
             cmd_bar.status_text = "모든 답변 완료. /grade 로 채점하세요."
-            self._mode = "idle"
+            self._set_mode("idle")
+            try:
+                self.query_one("#app-status", AppStatusBar).set_quiz_progress(0, 0)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Quiz block click
@@ -222,28 +248,41 @@ class GitStudyAppV2(App):
     ) -> None:
         if not self._questions:
             return
-        self._mode = "quiz_answering"
+        self._set_mode("quiz_answering")
         self._current_q_index = event.index
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.activate_question(event.index)
         self._update_answer_status()
+        try:
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(
+                event.index + 1, len(self._questions)
+            )
+        except Exception:
+            pass
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.focus_input()
 
     def on_command_bar_answer_exited(self, event: CommandBar.AnswerExited) -> None:
-        self._mode = "idle"
+        self._set_mode("idle")
         if self._questions:
             total = len(self._questions)
             answered = len(self._answers)
             self._set_status(
                 f"퀴즈 진행 중 ({answered}/{total} 답변) — 블록 클릭 또는 /answer 로 재진입"
             )
+        self.query_one("#cmd-bar", CommandBar).focus_input()
 
     def _resume_answer_mode(self) -> None:
         if not self._questions:
             self._set_status("진행 중인 퀴즈가 없습니다. /quiz 로 퀴즈를 생성하세요.")
             return
-        self._mode = "quiz_answering"
+        self._set_mode("quiz_answering")
+        try:
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(
+                self._current_q_index + 1, len(self._questions)
+            )
+        except Exception:
+            pass
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.activate_question(self._current_q_index)
         self._update_answer_status()
@@ -320,10 +359,21 @@ class GitStudyAppV2(App):
         self._save_app_state()
 
         count = len(indices)
-        self._set_status(
-            f"커밋 범위 선택됨: {oldest_sha[:7]}..{newest_sha[:7]} ({count} commits). "
-            "/quiz 로 퀴즈를 생성하세요."
-        )
+
+        # Update AppStatusBar range
+        try:
+            self.query_one("#app-status", AppStatusBar).set_range(oldest_sha, newest_sha, count)
+        except Exception:
+            pass
+
+        # 퀴즈 상태 초기화 후 새 범위의 세션 복원 시도
+        self._reset_quiz_state()
+        session_restored = self._try_restore_session()
+        if not session_restored:
+            self._set_status(
+                f"커밋 범위 선택됨: {oldest_sha[:7]}..{newest_sha[:7]} ({count} commits). "
+                "/quiz 로 퀴즈를 생성하세요."
+            )
 
     # ------------------------------------------------------------------
     # Quiz generation
@@ -334,25 +384,26 @@ class GitStudyAppV2(App):
         if self._mode in ("quiz_loading", "grading"):
             self.call_from_thread(self._set_status, "이미 작업이 진행 중입니다.")
             return
-        self._mode = "quiz_loading"
+        self.call_from_thread(self._set_mode, "quiz_loading")
         self.call_from_thread(self._set_status, "퀴즈 생성 준비 중...")
 
         try:
             oldest_sha, newest_sha = self._resolve_range(range_arg)
         except Exception as exc:
-            self._mode = "idle"
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, f"범위 해석 실패: {exc}")
             return
 
         self._oldest_sha = oldest_sha
         self._newest_sha = newest_sha
 
-        # Show the range in code view
+        # Show the range in code view + sync commit selection
         self.call_from_thread(
             self._show_range_in_view,
             oldest_sha,
             newest_sha,
         )
+        self.call_from_thread(self._sync_commit_selection, oldest_sha, newest_sha)
 
         # Build commit context
         try:
@@ -364,7 +415,7 @@ class GitStudyAppV2(App):
             else:
                 context = build_multi_commit_context(commits, "range_selected", repo)
         except Exception as exc:
-            self._mode = "idle"
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, f"커밋 컨텍스트 생성 실패: {exc}")
             return
 
@@ -386,12 +437,12 @@ class GitStudyAppV2(App):
                     if file_context:
                         known_files = parse_file_context_blocks(file_context)
         except Exception as exc:
-            self._mode = "idle"
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, f"퀴즈 생성 실패: {exc}")
             return
 
         if not questions:
-            self._mode = "idle"
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, "퀴즈 질문이 생성되지 않았습니다.")
             return
 
@@ -412,7 +463,7 @@ class GitStudyAppV2(App):
         self._grades = []
         self._known_files = known_files
         self._current_q_index = 0
-        self._mode = "quiz_answering"
+        # mode will be set to quiz_answering in _apply_quiz_to_view (called from main thread)
 
         # Phase 2: persist updated SHA range (set via /quiz range_arg)
         self.call_from_thread(self._save_app_state)
@@ -422,6 +473,12 @@ class GitStudyAppV2(App):
         self.call_from_thread(self._apply_quiz_to_view)
 
     def _apply_quiz_to_view(self) -> None:
+        self._set_mode("quiz_answering")
+        total = len(self._questions)
+        try:
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(1, total)
+        except Exception:
+            pass
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.load_inline_quiz(
             questions=self._questions,
@@ -432,7 +489,7 @@ class GitStudyAppV2(App):
         )
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.set_answer_mode(
-            f"Q1/{len(self._questions)}  |  [Shift+Enter] 제출  [Esc] 종료"
+            f"Q1/{total}  |  [Shift+Enter] 제출  [Esc] 종료"
         )
         cmd_bar.focus_input()
 
@@ -444,6 +501,15 @@ class GitStudyAppV2(App):
             oldest_commit_sha=oldest_sha,
             newest_commit_sha=newest_sha,
         )
+        # Update AppStatusBar range (count unknown here; use commits list for approximation)
+        try:
+            sha_index = {c.get("sha", ""): i for i, c in enumerate(self._commits)}
+            o_idx = sha_index.get(oldest_sha, 0)
+            n_idx = sha_index.get(newest_sha, 0)
+            count = abs(o_idx - n_idx) + 1
+            self.query_one("#app-status", AppStatusBar).set_range(oldest_sha, newest_sha, count)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Grading
@@ -465,7 +531,7 @@ class GitStudyAppV2(App):
             )
             return
 
-        self._mode = "grading"
+        self.call_from_thread(self._set_mode, "grading")
         self.call_from_thread(self._set_status, "채점 중...")
 
         grades: list[InlineQuizGrade] = []
@@ -478,12 +544,12 @@ class GitStudyAppV2(App):
                     result = event.get("result", {})
                     grades = result.get("final_grades", [])
         except Exception as exc:
-            self._mode = "idle"
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, f"채점 실패: {exc}")
             return
 
         self._grades = grades
-        self._mode = "idle"
+        self.call_from_thread(self._set_mode, "idle")
 
         # Phase 4: persist session with grades
         self.call_from_thread(self._save_session)
@@ -583,6 +649,18 @@ class GitStudyAppV2(App):
     # Phase 2: Persist app state (selected SHA range)
     # ------------------------------------------------------------------
 
+    def _sync_commit_selection(self, oldest_sha: str, newest_sha: str) -> None:
+        """SHA 범위에서 CommitSelection 인덱스를 역산해 동기화 (메인 스레드)."""
+        sha_index = {c.get("sha", ""): i for i, c in enumerate(self._commits)}
+        newest_idx = sha_index.get(newest_sha)
+        oldest_idx = sha_index.get(oldest_sha)
+        if newest_idx is None or oldest_idx is None:
+            return
+        if newest_idx == oldest_idx:
+            self._commit_selection = CommitSelection(start_index=newest_idx)
+        else:
+            self._commit_selection = CommitSelection(start_index=newest_idx, end_index=oldest_idx)
+
     def _save_app_state(self) -> None:
         if self._local_repo_root is None:
             return
@@ -608,6 +686,27 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
     # Phase 4: Quiz session save / restore
     # ------------------------------------------------------------------
+
+    def _reset_quiz_state(self) -> None:
+        """퀴즈/답변/채점 상태를 초기화하고 코드뷰 퀴즈 블록을 제거한다."""
+        self._questions = []
+        self._answers = {}
+        self._grades = []
+        self._known_files = {}
+        self._current_q_index = 0
+        self._set_mode("idle")
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_command_mode()
+        except Exception:
+            pass
+        try:
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(0, 0)
+        except Exception:
+            pass
+        try:
+            self.query_one("#code-view", InlineCodeView).clear_quiz()
+        except Exception:
+            pass
 
     def _session_id(self) -> str | None:
         if not self._oldest_sha or not self._newest_sha:
@@ -670,19 +769,19 @@ class GitStudyAppV2(App):
         self._known_files = {}
 
         if self._grades:
-            self._mode = "idle"
+            self._set_mode("idle")
             self._restore_graded_view()
         elif self._answers:
             answered_count = len(self._answers)
             total = len(self._questions)
             if answered_count >= total:
-                self._mode = "idle"
+                self._set_mode("idle")
                 self._restore_answered_view()
             else:
-                self._mode = "quiz_answering"
+                self._set_mode("quiz_answering")
                 self._restore_answering_view()
         else:
-            self._mode = "quiz_answering"
+            self._set_mode("quiz_answering")
             self._restore_answering_view()
 
         return True
@@ -728,6 +827,12 @@ class GitStudyAppV2(App):
         )
         answered = len(self._answers)
         total = len(self._questions)
+        try:
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(
+                self._current_q_index + 1, total
+            )
+        except Exception:
+            pass
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.set_answer_mode(
             f"Q{self._current_q_index + 1}/{total}  |  [Shift+Enter] 제출  [Esc] 종료"
@@ -748,16 +853,25 @@ class GitStudyAppV2(App):
         except Exception:
             pass
 
+    def _set_mode(self, mode: str) -> None:
+        """Set internal mode and sync AppStatusBar."""
+        self._mode = mode
+        try:
+            self.query_one("#app-status", AppStatusBar).set_mode(mode)
+        except Exception:
+            pass
+
     def _update_answer_status(self) -> None:
         q = self._current_q_index
         total = len(self._questions)
         fpath = self._questions[q].get("file_path", "") if q < total else ""
         fname = fpath.split("/")[-1] if fpath else ""
         file_info = f"  ·  {fname}" if fname else ""
+        hint = f"Q{q + 1}/{total}{file_info}  |  [Shift+Enter] 제출  [Esc] 종료  [/answer] 재진입"
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
-        cmd_bar.set_answer_mode(
-            f"Q{q + 1}/{total}{file_info}  |  [Shift+Enter] 제출  [Esc] 종료  [/answer] 재진입"
-        )
+        # mode는 이미 "answer"이므로 set_answer_mode 대신 status_text 직접 설정
+        # (reactive가 동일 mode값 재할당 시 후속 업데이트를 무시할 수 있음)
+        cmd_bar.status_text = hint
 
 
 def run_v2() -> None:
