@@ -317,6 +317,8 @@ class GitStudyAppV2(App):
         if not self._commits:
             self._set_status("커밋 목록이 없습니다.")
             return
+        # 커밋 목록이 갱신되었을 수 있으므로 SHA 기준으로 인덱스 재계산
+        self._sync_commit_selection(self._oldest_sha, self._newest_sha)
         self.push_screen(
             CommitPickerScreen(
                 self._commits,
