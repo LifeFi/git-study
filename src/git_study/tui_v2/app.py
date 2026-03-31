@@ -255,8 +255,29 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def _open_commit_picker(self) -> None:
+        self._set_status("커밋 목록 갱신 중...")
+        self._refresh_and_open_picker()
+
+    @work(thread=True)
+    def _refresh_and_open_picker(self) -> None:
+        try:
+            snapshot = get_commit_list_snapshot(
+                repo_source=self._repo_source,
+                refresh_remote=False,
+            )
+            commits = snapshot.get("commits", [])
+        except Exception as exc:
+            self.call_from_thread(self._set_status, f"커밋 갱신 실패: {exc}")
+            commits = self._commits  # 기존 목록으로 fallback
+
+        if commits:
+            self._commits = commits
+
+        self.call_from_thread(self._do_open_picker)
+
+    def _do_open_picker(self) -> None:
         if not self._commits:
-            self._set_status("커밋 목록이 없습니다. 잠시 후 다시 시도하세요.")
+            self._set_status("커밋 목록이 없습니다.")
             return
         self.push_screen(
             CommitPickerScreen(
