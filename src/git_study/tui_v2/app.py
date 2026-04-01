@@ -156,6 +156,8 @@ class GitStudyAppV2(App):
         self._commit_list_oldest_sha: str = ""
         # Current history block (Vertical) for attaching results to last command
         self._current_log_block = None
+        # Current in-progress loading row in HistoryView
+        self._current_progress_row = None
         # Chat mode state
         self._current_thread_id: str = ""
 
@@ -351,13 +353,14 @@ class GitStudyAppV2(App):
             self._log_command(event.text)
         match cmd.kind:
             case "quiz":
-                self._start_quiz(cmd.range_arg)
+                log_block_id = self._current_log_block.id if self._current_log_block else None
+                self._start_quiz(cmd.range_arg, log_block_id=log_block_id)
             case "review":
-                # 비동기 완료 후에도 올바른 블록을 찾도록 ID 전달
                 log_block_id = self._current_log_block.id if self._current_log_block else None
                 self._start_review(cmd.range_arg, log_block_id=log_block_id)
             case "grade":
-                self._start_grading()
+                log_block_id = self._current_log_block.id if self._current_log_block else None
+                self._start_grading(log_block_id=log_block_id)
             case "help":
                 self._show_help()
             case "commits":
@@ -489,11 +492,12 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def _open_commit_picker(self) -> None:
-        self._set_status("커밋 목록 갱신 중...")
-        self._refresh_and_open_picker()
+        log_block_id = self._current_log_block.id if self._current_log_block else None
+        self._begin_progress("커밋 목록 갱신 중...", log_block_id)
+        self._refresh_and_open_picker(log_block_id)
 
     @work(thread=True)
-    def _refresh_and_open_picker(self) -> None:
+    def _refresh_and_open_picker(self, log_block_id: str | None = None) -> None:
         try:
             snapshot = get_commit_list_snapshot(
                 limit=self._commit_list_limit,
@@ -526,10 +530,12 @@ class GitStudyAppV2(App):
                         extended += DEFAULT_COMMIT_LIST_LIMIT
             fresh_commits = snapshot.get("commits", [])
         except Exception as exc:
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"커밋 갱신 실패: {exc}")
             fresh_commits = []
             snapshot = {}
 
+        self.call_from_thread(self._end_progress)
         self.call_from_thread(self._do_open_picker, fresh_commits, snapshot)
 
     def _do_open_picker(self, fresh_commits: list[dict], snapshot: dict) -> None:
@@ -624,17 +630,18 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     @work(thread=True)
-    def _start_quiz(self, range_arg: str) -> None:
+    def _start_quiz(self, range_arg: str, log_block_id: str | None = None) -> None:
         if self._mode in ("quiz_loading", "grading"):
             self.call_from_thread(self._set_status, "이미 작업이 진행 중입니다.")
             return
         self.call_from_thread(self._set_mode, "quiz_loading")
-        self.call_from_thread(self._set_status, "퀴즈 생성 준비 중...")
+        self.call_from_thread(self._begin_progress, "퀴즈 생성 준비 중...", log_block_id)
 
         try:
             oldest_sha, newest_sha = self._resolve_range(range_arg)
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"범위 해석 실패: {exc}")
             return
 
@@ -660,11 +667,12 @@ class GitStudyAppV2(App):
                 context = build_multi_commit_context(commits, "range_selected", repo)
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"커밋 컨텍스트 생성 실패: {exc}")
             return
 
         # Stream quiz generation
-        self.call_from_thread(self._set_status, "퀴즈 생성 중...")
+        self.call_from_thread(self._update_progress, "퀴즈 생성 중...")
         questions: list[InlineQuizQuestion] = []
         known_files: dict[str, str] = {}
 
@@ -672,7 +680,7 @@ class GitStudyAppV2(App):
             for event in stream_inline_quiz_progress(context, count=4):
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
-                    self.call_from_thread(self._set_status, f"퀴즈 생성 중... {label}")
+                    self.call_from_thread(self._update_progress, f"퀴즈 생성 중... {label}")
                 elif event.get("type") == "result":
                     result = event.get("result", {})
                     questions = result.get("inline_questions", [])
@@ -682,13 +690,15 @@ class GitStudyAppV2(App):
                         known_files = parse_file_context_blocks(file_context)
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"퀴즈 생성 실패: {exc}")
             return
 
         if not questions:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, "퀴즈 질문이 생성되지 않았습니다.")
-            self.call_from_thread(self._log, "퀴즈 질문이 생성되지 않았습니다.", "error")
+            self.call_from_thread(self._log_to_block, "퀴즈 질문이 생성되지 않았습니다.", "error", log_block_id)
             return
 
         # git에서 전체 파일 내용을 가져와 known_files 보강/덮어쓰기
@@ -718,7 +728,8 @@ class GitStudyAppV2(App):
         # Phase 4: save initial session
         self.call_from_thread(self._save_session)
 
-        self.call_from_thread(self._log, f"퀴즈 생성 완료! {len(questions)}문제", "success")
+        self.call_from_thread(self._end_progress)
+        self.call_from_thread(self._log_to_block, f"퀴즈 생성 완료! {len(questions)}문제", "success", log_block_id)
         self.call_from_thread(self._apply_quiz_to_view)
 
     def _apply_quiz_to_view(self) -> None:
@@ -772,12 +783,13 @@ class GitStudyAppV2(App):
             return
         self.call_from_thread(self._set_mode, "reviewing")
         self.call_from_thread(self._show_chat_view)
-        self.call_from_thread(self._set_status, "리뷰 준비 중...")
+        self.call_from_thread(self._begin_progress, "리뷰 준비 중...", log_block_id)
 
         try:
             oldest_sha, newest_sha = self._resolve_range(range_arg)
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"범위 해석 실패: {exc}")
             self.call_from_thread(self._log, f"범위 해석 실패: {exc}", "error")
             return
@@ -801,26 +813,29 @@ class GitStudyAppV2(App):
                 context = build_multi_commit_context(commits, "range_selected", repo)
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"커밋 컨텍스트 생성 실패: {exc}")
             self.call_from_thread(self._log, f"컨텍스트 생성 실패: {exc}", "error")
             return
 
-        self.call_from_thread(self._set_status, "리뷰 생성 중...")
+        self.call_from_thread(self._update_progress, "리뷰 생성 중...")
         final_output = ""
         try:
             for event in stream_read_progress(context):
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
-                    self.call_from_thread(self._set_status, f"리뷰 생성 중... {label}")
+                    self.call_from_thread(self._update_progress, f"리뷰 생성 중... {label}")
                 elif event.get("type") == "result":
                     final_output = event.get("result", {}).get("final_output", "")
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"리뷰 생성 실패: {exc}")
             self.call_from_thread(self._log, f"리뷰 생성 실패: {exc}", "error")
             return
 
         self.call_from_thread(self._set_mode, "idle")
+        self.call_from_thread(self._end_progress)
         if final_output:
             self.call_from_thread(self._render_review, final_output, log_block_id)
             self.call_from_thread(self._set_status, "리뷰 완료.")
@@ -848,7 +863,7 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     @work(thread=True)
-    def _start_grading(self) -> None:
+    def _start_grading(self, log_block_id: str | None = None) -> None:
         if not self._questions:
             self.call_from_thread(self._set_status, "채점할 퀴즈가 없습니다. /quiz 먼저 실행하세요.")
             return
@@ -864,30 +879,32 @@ class GitStudyAppV2(App):
             return
 
         self.call_from_thread(self._set_mode, "grading")
-        self.call_from_thread(self._set_status, "채점 중...")
+        self.call_from_thread(self._begin_progress, "채점 중...", log_block_id)
 
         grades: list[InlineQuizGrade] = []
         try:
             for event in stream_inline_grade_progress(self._questions, self._answers):
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
-                    self.call_from_thread(self._set_status, f"채점 중... {label}")
+                    self.call_from_thread(self._update_progress, f"채점 중... {label}")
                 elif event.get("type") == "result":
                     result = event.get("result", {})
                     grades = result.get("final_grades", [])
         except Exception as exc:
             self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._end_progress)
             self.call_from_thread(self._set_status, f"채점 실패: {exc}")
             return
 
         self._grades = grades
         self.call_from_thread(self._set_mode, "idle")
+        self.call_from_thread(self._end_progress)
 
         # Phase 4: persist session with grades
         self.call_from_thread(self._save_session)
-        self.call_from_thread(self._apply_grades_to_view, grades)
+        self.call_from_thread(self._apply_grades_to_view, grades, log_block_id)
 
-    def _apply_grades_to_view(self, grades: list[InlineQuizGrade]) -> None:
+    def _apply_grades_to_view(self, grades: list[InlineQuizGrade], log_block_id: str | None = None) -> None:
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.update_grades(grades)
         # Compute average score
@@ -895,8 +912,9 @@ class GitStudyAppV2(App):
         avg = sum(scores) / len(scores) if scores else 0
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.set_command_mode()
-        cmd_bar.status_text = f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)"
-        self._log(f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)", "success")
+        msg = f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)"
+        cmd_bar.status_text = msg
+        self._log_to_block(msg, "success", log_block_id)
 
     # ------------------------------------------------------------------
     # Help
@@ -1853,6 +1871,53 @@ class GitStudyAppV2(App):
         try:
             cmd_bar = self.query_one("#cmd-bar", CommandBar)
             cmd_bar.status_text = text
+        except Exception:
+            pass
+
+    def _begin_progress(self, text: str, block_id: str | None = None) -> None:
+        """커맨드 블록 아래에 스피너 로딩 위젯 표시. block_id 지정 시 해당 블록에 붙임."""
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            block = None
+            if block_id:
+                try:
+                    block = hv.query_one(f"#{block_id}")
+                except Exception:
+                    pass
+            if block is None:
+                block = self._current_log_block
+            self._current_progress_row = hv.begin_progress(text, block=block)
+        except Exception:
+            pass
+
+    def _log_to_block(self, text: str, style: str, block_id: str | None = None) -> None:
+        """block_id 블록에 결과 row 추가. 없으면 _log() 폴백."""
+        if block_id:
+            try:
+                hv = self.query_one("#history-view", HistoryView)
+                block = hv.query_one(f"#{block_id}")
+                hv.append_result(text, style, block=block)
+                self._log_chat("app_result", text, style)
+                return
+            except Exception:
+                pass
+        self._log(text, style)
+
+    def _update_progress(self, text: str) -> None:
+        """로딩 위젯 텍스트 업데이트."""
+        try:
+            if self._current_progress_row is not None:
+                self._current_progress_row.set_text(text)
+        except Exception:
+            pass
+
+    def _end_progress(self) -> None:
+        """로딩 위젯 제거."""
+        try:
+            if self._current_progress_row is not None:
+                hv = self.query_one("#history-view", HistoryView)
+                hv.end_progress(self._current_progress_row)
+                self._current_progress_row = None
         except Exception:
             pass
 

@@ -21,6 +21,41 @@ def _get_version() -> str:
 _CHEVRON = ">"
 _RESULT_PREFIX = "  └ "
 _cmd_block_counter: int = 0
+_SPINNER_FRAMES = ["|", "/", "—", "\\"]
+
+
+class LoadingRow(Widget):
+    """스피너 애니메이션이 포함된 한 줄짜리 진행 상태 위젯."""
+
+    DEFAULT_CSS = """
+    LoadingRow {
+        height: 1;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(self, text: str) -> None:
+        super().__init__(classes="hv-loading-row")
+        self._text = text
+        self._frame_idx = 0
+
+    def on_mount(self) -> None:
+        self.set_interval(0.1, self._tick)
+
+    def _tick(self) -> None:
+        self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        self.refresh()
+
+    def set_text(self, text: str) -> None:
+        self._text = text
+        self.refresh()
+
+    def render(self) -> Text:
+        frame = _SPINNER_FRAMES[self._frame_idx]
+        t = Text()
+        t.append(f"{frame} ", style="bold yellow")
+        t.append(self._text, style="dim")
+        return t
 
 
 class HistoryView(Widget):
@@ -242,6 +277,21 @@ class HistoryView(Widget):
         target = block or self.query_one("#hv-content", Vertical)
         row = Static(f"  🔧 {name} 실행 중...", classes="hv-tool-call")
         target.mount(row)
+
+    def begin_progress(self, text: str, block: Vertical | None = None) -> LoadingRow:
+        """스피너 로딩 위젯을 block 아래에 추가. 반환된 위젯으로 업데이트/제거."""
+        target = block or self.query_one("#hv-content", Vertical)
+        row = LoadingRow(text)
+        target.mount(row)
+        self._scroll_to_end()
+        return row
+
+    def end_progress(self, row: LoadingRow) -> None:
+        """로딩 위젯 제거."""
+        try:
+            row.remove()
+        except Exception:
+            pass
 
     def clear(self) -> None:
         """Clear all history entries (keep welcome)."""
