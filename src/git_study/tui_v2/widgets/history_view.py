@@ -20,6 +20,7 @@ def _get_version() -> str:
 
 _CHEVRON = ">"
 _RESULT_PREFIX = "  └ "
+_cmd_block_counter: int = 0
 
 
 class HistoryView(Widget):
@@ -142,11 +143,14 @@ class HistoryView(Widget):
 
     def append_command(self, cmd: str) -> Vertical:
         """Append a command row (▶ /cmd style). Returns the block for adding results."""
+        global _cmd_block_counter
+        _cmd_block_counter += 1
+        block_id = f"hvcb{_cmd_block_counter}"
         container = self.query_one("#hv-content", Vertical)
         cmd_text = Text()
         cmd_text.append(f"{_CHEVRON} ", style="bold dim")
         cmd_text.append(cmd)
-        block = Vertical(classes="hv-cmd-block")
+        block = Vertical(classes="hv-cmd-block", id=block_id)
         cmd_row = Static(cmd_text, classes="hv-cmd-row")
         container.mount(block)
         block.mount(cmd_row)
@@ -186,7 +190,12 @@ class HistoryView(Widget):
         target = block or self.query_one("#hv-content", Vertical)
         md_widget = Markdown(md_text, classes="hv-markdown")
         target.mount(md_widget)
-        self._scroll_to_end()
+        if block is not None:
+            # 특정 block에 추가할 때는 해당 block이 보이도록 스크롤
+            # (끝으로 스크롤하면 중간에 삽입된 결과가 뷰포트 밖으로 나감)
+            self.call_after_refresh(block.scroll_visible, animate=False)
+        else:
+            self._scroll_to_end()
 
     def append_separator(self, text: str = "─" * 40) -> None:
         """구분선 추가 (세션 복원 시 이전/현재 세션 구분용)."""

@@ -353,7 +353,9 @@ class GitStudyAppV2(App):
             case "quiz":
                 self._start_quiz(cmd.range_arg)
             case "review":
-                self._start_review(cmd.range_arg, log_block=self._current_log_block)
+                # 비동기 완료 후에도 올바른 블록을 찾도록 ID 전달
+                log_block_id = self._current_log_block.id if self._current_log_block else None
+                self._start_review(cmd.range_arg, log_block_id=log_block_id)
             case "grade":
                 self._start_grading()
             case "help":
@@ -764,7 +766,7 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     @work(thread=True)
-    def _start_review(self, range_arg: str, log_block=None) -> None:
+    def _start_review(self, range_arg: str, log_block_id: str | None = None) -> None:
         if self._mode in ("quiz_loading", "grading", "reviewing"):
             self.call_from_thread(self._set_status, "이미 작업이 진행 중입니다.")
             return
@@ -820,19 +822,26 @@ class GitStudyAppV2(App):
 
         self.call_from_thread(self._set_mode, "idle")
         if final_output:
-            self.call_from_thread(self._render_review, final_output, log_block)
+            self.call_from_thread(self._render_review, final_output, log_block_id)
             self.call_from_thread(self._set_status, "리뷰 완료.")
         else:
             self.call_from_thread(self._log, "리뷰 내용이 생성되지 않았습니다.", "error")
             self.call_from_thread(self._set_status, "리뷰 생성 실패.")
 
-    def _render_review(self, md_text: str, log_block=None) -> None:
+    def _render_review(self, md_text: str, log_block_id: str | None = None) -> None:
         try:
             hv = self.query_one("#history-view", HistoryView)
-            hv.append_markdown(md_text, block=log_block)
+            # CSS ID로 블록 조회 — 위젯 참조보다 신뢰할 수 있음
+            block = None
+            if log_block_id:
+                try:
+                    block = hv.query_one(f"#{log_block_id}")
+                except Exception:
+                    pass
+            hv.append_markdown(md_text, block=block)
         except Exception:
             pass
-        self._log_chat("app_markdown", md_text)
+        self._log_chat("app_markdown", md_text, block_id=log_block_id or "")
 
     # ------------------------------------------------------------------
     # Grading
@@ -1315,10 +1324,13 @@ class GitStudyAppV2(App):
     def _replay_thread_log(self, hv: HistoryView, events: list[dict]) -> None:
         """thread_log 이벤트를 HistoryView에 재생한다 (채팅 + UI 명령 이벤트 통합)."""
         block = None
+        # 원본 block_id → 새로 생성된 블록 위젯 매핑 (비동기 완료 결과 복원용)
+        block_id_map: dict[str, object] = {}
         for event in events:
             kind = event.get("kind", "")
             content = event.get("content", "")
             style = event.get("style", "info")
+            orig_block_id = event.get("block_id", "")
             match kind:
                 case "user_message":
                     block = hv.append_user_message(content)
@@ -1330,10 +1342,15 @@ class GitStudyAppV2(App):
                     hv.append_tool_call(name, block=block)
                 case "app_command" | "command":
                     block = hv.append_command(content)
+                    # 원본 block_id가 있으면 새 블록과 매핑해둠
+                    if orig_block_id:
+                        block_id_map[orig_block_id] = block
                 case "app_result" | "result":
                     hv.append_result(content, style, block=block)
                 case "app_markdown" | "markdown":
-                    hv.append_markdown(content, block=block)
+                    # block_id가 저장돼 있으면 매핑에서 원본 블록을 찾아 사용
+                    target_block = block_id_map.get(orig_block_id, block) if orig_block_id else block
+                    hv.append_markdown(content, block=target_block)
                 case "separator":
                     hv.append_separator(content)
                 case "cleared":
@@ -1785,7 +1802,7 @@ class GitStudyAppV2(App):
                 self._set_status("선택된 커밋이 없습니다. /commits 로 커밋을 선택하세요.")
         self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
 
-    def _log_chat(self, kind: str, content: str, style: str = "") -> None:
+    def _log_chat(self, kind: str, content: str, style: str = "", block_id: str = "") -> None:
         """thread_log.jsonl에 UI 이벤트를 기록한다 (thread_id 미확정 시 무시)."""
         tid = self._current_thread_id
         if not tid:
@@ -1797,6 +1814,8 @@ class GitStudyAppV2(App):
         }
         if style:
             event["style"] = style
+        if block_id:
+            event["block_id"] = block_id
         try:
             append_thread_event(
                 tid,
@@ -1815,7 +1834,8 @@ class GitStudyAppV2(App):
             self._current_log_block = hv.append_command(cmd)
         except Exception:
             pass
-        self._log_chat("app_command", cmd)
+        block_id = self._current_log_block.id if self._current_log_block else ""
+        self._log_chat("app_command", cmd, block_id=block_id)
 
     def _log(self, text: str, style: str = "info") -> None:
         """Append a result row. If there's a current command block, attaches there; otherwise standalone."""
