@@ -150,12 +150,22 @@ class LLMClient:
             method=method,
             strict=strict,
         )
+        def _is_unretryable(e: Exception) -> bool:
+            s = str(e)
+            return "context_length_exceeded" in s or (
+                "400" in s and "maximum context length" in s
+            )
+
         try:
             return structured_llm.invoke(prompt)
         except Exception as exc:
+            if _is_unretryable(exc):
+                raise
             try:
                 return structured_llm.invoke(retry_prompt)
             except Exception as retry_exc:
+                if _is_unretryable(retry_exc):
+                    raise retry_exc
                 try:
                     relaxed_structured_llm = self._llm.with_structured_output(
                         schema,

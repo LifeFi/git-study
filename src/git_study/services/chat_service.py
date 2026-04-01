@@ -149,12 +149,17 @@ def stream_chat(
         except Exception as exc:
             exc_str = str(exc)
             is_rate_limit = "429" in exc_str or "rate_limit_exceeded" in exc_str.lower()
+            is_ctx_exceeded = "context_length_exceeded" in exc_str or (
+                "400" in exc_str and "maximum context length" in exc_str
+            )
             if is_rate_limit and not yielded_any and attempt < _MAX_RETRIES:
                 wait = min(0.5 * (2 ** attempt), 5.0)  # 0.5s → 1s → 2s, 최대 5s
                 time.sleep(wait)
                 continue
             if is_rate_limit:
                 yield {"type": "error", "content": "API 요청 한도 초과. 잠시 후 다시 시도해 주세요."}
+            elif is_ctx_exceeded:
+                yield {"type": "error", "content": "대화 기록이 너무 깁니다. /clear 로 새 대화를 시작해 주세요."}
             else:
                 yield {"type": "error", "content": exc_str}
             return

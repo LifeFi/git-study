@@ -1577,7 +1577,7 @@ class GitStudyAppV2(App):
                         if streaming is not None:
                             hv.end_streaming(block, streaming, "")
                 self.call_from_thread(_on_error)
-                self.call_from_thread(self._log, f"채팅 오류: {err}", "error")
+                self.call_from_thread(self._log, err, "error")
                 self.call_from_thread(self._set_mode, "idle")
                 return
 
