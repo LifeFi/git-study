@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field, RootModel
 from ..domain.inline_anchor import (
     extract_file_paths_from_summary,
     parse_file_context_blocks,
-    snippet_exists_in_content,
 )
 from ..llm.client import LLMClient
 from ..llm.schemas import (
@@ -37,6 +36,7 @@ class InlineQuizGraphState(TypedDict, total=False):
 
 class InlineAnchorCandidateStructuredOutput(BaseModel):
     file_path: str = Field(default="")
+    anchor_line: int = Field(default=0)
     anchor_snippet: str = Field(default="")
     question_type: str = Field(default="intent")
     reason: str = Field(default="")
@@ -51,6 +51,7 @@ class InlineAnchorCandidateListStructuredOutput(
 class InlineQuestionStructuredOutput(BaseModel):
     id: str = Field(default="")
     file_path: str = Field(default="")
+    anchor_line: int = Field(default=0)
     anchor_snippet: str = Field(default="")
     question: str = Field(default="")
     expected_answer: str = Field(default="")
@@ -72,7 +73,8 @@ TOOL_USAGE_SUFFIX = """
 Tooling:
 - You have access to `get_neighbor_code_context`.
 - Before returning the final JSON, call `get_neighbor_code_context` at least once for one of the validated anchors.
-- Use the returned neighboring code only to improve reasoning quality. Final `file_path` and `anchor_snippet` must still match the validated anchors exactly.
+- Pass the anchor_line from a validated anchor to inspect surrounding code.
+- Use the returned neighboring code only to improve reasoning quality. Final `file_path` and `anchor_line` must still match the validated anchors exactly.
 """.strip()
 
 
@@ -111,74 +113,35 @@ def extract_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphSta
     return {"anchor_candidates": anchor_candidates}
 
 
-def _extract_diff_code_lines(diff_text: str, file_path: str) -> str:
-    """diff_text에서 특정 파일의 코드 라인만 추출 (+/- 접두사 제거)."""
-    lines: list[str] = []
-    in_file = False
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            in_file = file_path in line
-            continue
-        if not in_file:
-            continue
-        if line.startswith("@@"):
-            continue
-        if line.startswith(("---", "+++")):
-            continue
-        if line.startswith(("+", "-", " ")):
-            lines.append(line[1:])  # 접두사 제거
-        elif not line.startswith("\\"):
-            lines.append(line)
-    return "\n".join(lines)
-
-
-def _snippet_exists_in_any(sources: list[str], snippet: str) -> bool:
-    """여러 소스 중 하나에서라도 snippet이 존재하면 True."""
-    snippet_lines = [l.strip() for l in snippet.splitlines() if l.strip()]
-    if not snippet_lines:
-        return False
-    snippet_joined = "\n".join(snippet_lines)
-
-    for source in sources:
-        if not source:
-            continue
-        # 정확한 매칭
-        if snippet_exists_in_content(source, snippet):
-            return True
-        # 느슨한 매칭 (빈 줄/공백 차이 허용)
-        source_lines = [l.strip() for l in source.splitlines() if l.strip()]
-        if snippet_joined in "\n".join(source_lines):
-            return True
-    return False
-
-
 def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphState:
     actual_paths = set(state.get("actual_paths", []))
     file_context_map = state.get("file_context_map", {})
-    diff_text = state.get("commit_context", {}).get("diff_text", "")
-    validated: list[dict[str, str]] = []
-    seen_pairs: set[tuple[str, str]] = set()
+    validated: list[dict] = []
+    seen_pairs: set[tuple[str, int]] = set()
 
     for candidate in state.get("anchor_candidates", []):
         file_path = str(candidate.get("file_path", "")).strip()
-        anchor_snippet = str(candidate.get("anchor_snippet", "")).strip()
+        try:
+            anchor_line = int(candidate.get("anchor_line", 0))
+        except (TypeError, ValueError):
+            continue
         question_type = str(candidate.get("question_type", "intent")).strip() or "intent"
         reason = str(candidate.get("reason", "")).strip()
         if file_path not in actual_paths:
             continue
-        # file_context_map(잘림 가능) + diff 코드 라인 모두에서 검증
         content = file_context_map.get(file_path, "")
-        diff_code = _extract_diff_code_lines(diff_text, file_path)
-        if not _snippet_exists_in_any([content, diff_code], anchor_snippet):
+        line_count = len(content.splitlines()) if content else 0
+        if anchor_line < 1 or anchor_line > line_count:
             continue
-        pair = (file_path, anchor_snippet)
+        pair = (file_path, anchor_line)
         if pair in seen_pairs:
             continue
         seen_pairs.add(pair)
         validated.append(
             {
                 "file_path": file_path,
-                "anchor_snippet": anchor_snippet,
+                "anchor_line": anchor_line,
+                "anchor_snippet": str(candidate.get("anchor_snippet", "")).strip(),
                 "question_type": question_type,
                 "reason": reason,
             }
@@ -189,16 +152,15 @@ def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphSt
     if not validated:
         for file_path in state.get("actual_paths", []):
             content = file_context_map.get(file_path, "")
-            all_lines = content.splitlines()
-            if len(all_lines) < 3:
+            if not content or len(content.splitlines()) < 3:
                 continue
-            snippet = "\n".join(all_lines[: min(5, len(all_lines))])
             validated.append(
                 {
                     "file_path": file_path,
-                    "anchor_snippet": snippet,
+                    "anchor_line": 1,
+                    "anchor_snippet": "",
                     "question_type": "intent",
-                    "reason": "파일 상단의 핵심 문맥을 fallback anchor로 사용",
+                    "reason": "파일 상단을 fallback anchor로 사용",
                 }
             )
             if len(validated) >= max(state.get("count", 4), 4):
@@ -234,13 +196,16 @@ def generate_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
     )
     questions: list[InlineQuizQuestion] = []
     validated_pairs = {
-        (item["file_path"], item["anchor_snippet"]): item
+        (item["file_path"], int(item.get("anchor_line", 0))): item
         for item in state.get("validated_anchors", [])
     }
     for index, item in enumerate(items):
         file_path = str(item.get("file_path", ""))
-        anchor_snippet = str(item.get("anchor_snippet", ""))
-        fallback = validated_pairs.get((file_path, anchor_snippet))
+        try:
+            anchor_line = int(item.get("anchor_line", 0))
+        except (TypeError, ValueError):
+            anchor_line = 0
+        fallback = validated_pairs.get((file_path, anchor_line))
         if fallback is None:
             if index < len(state.get("validated_anchors", [])):
                 fallback = state["validated_anchors"][index]
@@ -252,7 +217,8 @@ def generate_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
             InlineQuizQuestion(
                 id=str(item.get("id", f"q{len(questions) + 1}")),
                 file_path=fallback["file_path"],
-                anchor_snippet=fallback["anchor_snippet"],
+                anchor_line=int(fallback.get("anchor_line", 1)),
+                anchor_snippet=fallback.get("anchor_snippet", ""),
                 question=str(item.get("question", "")).strip(),
                 expected_answer=str(item.get("expected_answer", "")).strip(),
                 question_type=str(
@@ -318,13 +284,16 @@ def repair_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState
     )
     questions: list[InlineQuizQuestion] = []
     validated_pairs = {
-        (item["file_path"], item["anchor_snippet"]): item
+        (item["file_path"], int(item.get("anchor_line", 0))): item
         for item in state.get("validated_anchors", [])
     }
     for index, item in enumerate(items):
         file_path = str(item.get("file_path", ""))
-        anchor_snippet = str(item.get("anchor_snippet", ""))
-        fallback = validated_pairs.get((file_path, anchor_snippet))
+        try:
+            anchor_line = int(item.get("anchor_line", 0))
+        except (TypeError, ValueError):
+            anchor_line = 0
+        fallback = validated_pairs.get((file_path, anchor_line))
         if fallback is None:
             if index < len(state.get("validated_anchors", [])):
                 fallback = state["validated_anchors"][index]
@@ -336,7 +305,8 @@ def repair_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState
             InlineQuizQuestion(
                 id=str(item.get("id", f"q{len(questions) + 1}")),
                 file_path=fallback["file_path"],
-                anchor_snippet=fallback["anchor_snippet"],
+                anchor_line=int(fallback.get("anchor_line", 1)),
+                anchor_snippet=fallback.get("anchor_snippet", ""),
                 question=str(item.get("question", "")).strip(),
                 expected_answer=str(item.get("expected_answer", "")).strip(),
                 question_type=str(
@@ -373,7 +343,8 @@ def finalize_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
             InlineQuizQuestion(
                 id=f"q{index}",
                 file_path=item["file_path"],
-                anchor_snippet=item["anchor_snippet"],
+                anchor_line=int(item.get("anchor_line", 1)),
+                anchor_snippet=item.get("anchor_snippet", ""),
                 question="이 코드 조각이 이번 변경에서 맡는 역할을 설명해 주세요.",
                 expected_answer="이 코드가 변경의 의도와 동작에 어떤 영향을 주는지, 주변 흐름과 함께 설명해야 합니다.",
                 question_type=item.get("question_type", "intent"),

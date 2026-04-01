@@ -58,6 +58,7 @@ class GradingSummaryPayload(TypedDict):
 
 class InlineAnchorCandidate(TypedDict):
     file_path: str
+    anchor_line: int
     anchor_snippet: str
     question_type: str
     reason: str
@@ -66,6 +67,7 @@ class InlineAnchorCandidate(TypedDict):
 class InlineQuestionPayload(TypedDict):
     id: str
     file_path: str
+    anchor_line: int
     anchor_snippet: str
     question: str
     expected_answer: str
@@ -212,22 +214,27 @@ def normalize_grading_summary(payload: Any) -> GradingSummaryPayload:
 def normalize_inline_anchor_candidates(payload: Any) -> list[InlineAnchorCandidate]:
     items = payload if isinstance(payload, list) else []
     anchors: list[InlineAnchorCandidate] = []
-    seen_pairs: set[tuple[str, str]] = set()
+    seen_pairs: set[tuple[str, int]] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
         file_path = str(item.get("file_path", "")).strip()
+        try:
+            anchor_line = int(item.get("anchor_line", 0))
+        except (TypeError, ValueError):
+            anchor_line = 0
         anchor_snippet = str(item.get("anchor_snippet", "")).strip()
         question_type = str(item.get("question_type", "intent")).strip() or "intent"
         if question_type not in QUESTION_TYPES:
             question_type = "intent"
-        pair = (file_path, anchor_snippet)
-        if not file_path or not anchor_snippet or pair in seen_pairs:
+        pair = (file_path, anchor_line)
+        if not file_path or anchor_line < 1 or pair in seen_pairs:
             continue
         seen_pairs.add(pair)
         anchors.append(
             {
                 "file_path": file_path,
+                "anchor_line": anchor_line,
                 "anchor_snippet": anchor_snippet,
                 "question_type": question_type,
                 "reason": str(item.get("reason", "")).strip(),
@@ -250,10 +257,15 @@ def normalize_inline_questions(payload: Any) -> list[InlineQuestionPayload]:
         question_type = str(item.get("question_type", "intent")).strip() or "intent"
         if question_type not in QUESTION_TYPES:
             question_type = "intent"
+        try:
+            anchor_line = int(item.get("anchor_line", 0))
+        except (TypeError, ValueError):
+            anchor_line = 0
         questions.append(
             {
                 "id": question_id,
                 "file_path": str(item.get("file_path", "")).strip(),
+                "anchor_line": anchor_line,
                 "anchor_snippet": str(item.get("anchor_snippet", "")).strip(),
                 "question": str(item.get("question", "")).strip(),
                 "expected_answer": str(item.get("expected_answer", "")).strip(),

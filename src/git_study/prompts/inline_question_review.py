@@ -25,7 +25,7 @@ Return ONLY raw JSON:
 
 Review rules:
 - Check whether the JSON contains exactly 4 grounded inline questions unless fewer validated anchors were available.
-- Check whether each question reuses a validated file_path and anchor_snippet.
+- Check whether each question reuses a validated file_path and anchor_line.
 - Check whether the questions are reasoning-heavy and not trivial line-matching prompts.
 - Check whether the question set covers intent, behavior, tradeoff, and vulnerability as evenly as possible.
 - Check whether the content obeys all hard constraints in the user request.

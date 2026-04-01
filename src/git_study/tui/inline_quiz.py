@@ -48,6 +48,17 @@ QUESTION_TYPE_KO = {
 }
 
 
+def resolve_anchor_line(question: dict, file_content: str) -> int | None:
+    """새 질문은 anchor_line 직접 사용, 레거시는 snippet fallback."""
+    anchor_line = question.get("anchor_line")
+    if isinstance(anchor_line, int) and anchor_line >= 1:
+        return anchor_line
+    snippet = question.get("anchor_snippet", "")
+    if snippet and file_content:
+        return find_anchor_line(file_content, snippet)
+    return None
+
+
 def find_anchor_line(file_content: str, anchor_snippet: str) -> int | None:
     """anchor_snippet이 파일 내 몇 번째 줄에서 시작하는지 반환 (1-based).
 
@@ -935,7 +946,7 @@ class InlineQuizWidget(Vertical):
         key = f"{question['id']}:{question['file_path']}"
         if key not in self._anchor_cache:
             _, content = self._get_file_content(question)
-            self._anchor_cache[key] = find_anchor_line(content, question["anchor_snippet"])
+            self._anchor_cache[key] = resolve_anchor_line(question, content)
         return self._anchor_cache[key]
 
     def _update_question_panel(self, *, focus_input: bool = False) -> None:

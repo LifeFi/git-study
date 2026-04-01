@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class CommitListSnapshot(TypedDict):
@@ -27,6 +27,7 @@ class InlineQuizQuestion(TypedDict):
     id: str
     file_path: str
     anchor_snippet: str
+    anchor_line: NotRequired[int]
     question: str
     expected_answer: str
     question_type: str

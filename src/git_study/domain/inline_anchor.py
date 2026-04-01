@@ -33,13 +33,23 @@ def parse_file_context_blocks(file_context_text: str) -> dict[str, str]:
         else:
             content = rest.rstrip()
         if path and content:
-            blocks[path] = content
+            blocks[path] = strip_line_numbers(content)
     return blocks
 
 
 def normalize_anchor_snippet(snippet: str) -> str:
     lines = [line.rstrip() for line in snippet.splitlines()]
     return "\n".join(lines).strip()
+
+
+def strip_line_numbers(content: str) -> str:
+    """'  N | ' 형식의 라인 번호 접두사를 제거."""
+    lines = content.splitlines()
+    stripped = []
+    for line in lines:
+        m = re.match(r"^\s*\d+\s*\|\s?", line)
+        stripped.append(line[m.end():] if m else line)
+    return "\n".join(stripped)
 
 
 def snippet_exists_in_content(content: str, snippet: str) -> bool:

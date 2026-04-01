@@ -103,7 +103,11 @@ def detect_code_language(path: str) -> str:
 def format_file_context_block(path: str, content: str) -> str:
     language = detect_code_language(path)
     snippet = content[:MAX_FILE_SNIPPET_CHARS].rstrip()
-    return "\n".join([f"FILE: {path}", f"```{language}", snippet, "```"])
+    numbered = "\n".join(
+        f"{i:4d} | {line}"
+        for i, line in enumerate(snippet.splitlines(), start=1)
+    )
+    return "\n".join([f"FILE: {path}", f"```{language}", numbered, "```"])
 
 
 def extract_patch_text(commit) -> str:

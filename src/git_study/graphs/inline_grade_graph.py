@@ -55,7 +55,8 @@ def prepare_grading_payload(state: InlineGradeGraphState) -> InlineGradeGraphSta
         answer = state.get("answers", {}).get(question["id"], "").strip()
         blocks.append(
             f"\n--- {question['id']} [{question['question_type']}] ---\n"
-            f"코드:\n{question['anchor_snippet'][:300]}\n"
+            f"코드 위치: Line {question.get('anchor_line', '?')}\n"
+            f"{question.get('anchor_snippet', '')[:300]}\n"
             f"질문: {question['question']}\n"
             f"모범 답안: {question['expected_answer']}\n"
             f"사용자 답변: {answer or '(답변 없음)'}\n"

@@ -33,7 +33,7 @@ Return ONLY a raw JSON array:
   {{
     "id": "q1",
     "file_path": "exact path from the validated anchors",
-    "anchor_snippet": "exact anchor snippet from the validated anchors",
+    "anchor_line": <exact anchor_line from the validated anchors>,
     "question": "질문 내용 (한국어)",
     "expected_answer": "모범 답안 2-4문장 (한국어)",
     "question_type": "intent"
@@ -41,7 +41,7 @@ Return ONLY a raw JSON array:
 ]
 
 Rules:
-- Reuse file_path and anchor_snippet exactly from the validated anchors.
+- Reuse file_path and anchor_line exactly from the validated anchors.
 - Cover these question types across the full set: intent, behavior, tradeoff, vulnerability.
 - Questions should require reasoning, not line matching.
 - expected_answer should stay grounded in the provided diff and file context only.
