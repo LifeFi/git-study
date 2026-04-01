@@ -9,6 +9,7 @@ from .commit_analysis_subgraph import (
     analyze_change as analyze_commit_change,
     last_user_request,
     resolve_commit_context as resolve_shared_commit_context,
+    selected_context_note,
 )
 from ..llm.client import LLMClient
 from ..llm.schemas import normalize_quiz_review
@@ -46,6 +47,14 @@ class ReadReviewStructuredOutput(BaseModel):
 
 
 def resolve_commit_context(state: ReadGraphState) -> ReadGraphState:
+    # 이미 컨텍스트가 주입된 경우(diff_text 존재) → 외부 fetch 건너뜀
+    if state.get("diff_text"):
+        return {
+            "selected_context_note": selected_context_note(
+                state.get("selected_reason", ""),
+                "read",
+            )
+        }
     return resolve_shared_commit_context(
         {
             **state,

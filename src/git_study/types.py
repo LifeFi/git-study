@@ -1,4 +1,4 @@
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 class CommitListSnapshot(TypedDict):
@@ -62,3 +62,19 @@ class GeneralQuizGrade(TypedDict):
     id: str
     score: int
     feedback: str
+
+
+class ChatEvent(TypedDict):
+    kind: Literal[
+        "app_command",       # /quiz, /commits 등 앱 명령어
+        "app_result",        # 앱 결과 메시지 (기존 result/markdown 대응)
+        "user_message",      # LLM에 보내는 자유 텍스트
+        "assistant_message", # LLM 응답
+        "tool_call",         # LLM이 호출한 tool
+        "tool_result",       # tool 실행 결과
+        "separator",
+    ]
+    content: str
+    data: NotRequired[dict]   # tool_calls 구조체 등 구조화 데이터
+    style: NotRequired[str]   # app_result 타입일 때: "info" | "success" | "error"
+    timestamp: str

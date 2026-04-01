@@ -17,7 +17,15 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/quiz HEAD", "HEAD 커밋 퀴즈"),
     ("/quiz HEAD~3", "최근 4개 커밋 퀴즈"),
     ("/quiz HEAD~1..HEAD~4", "범위 지정 퀴즈"),
+    ("/review", "커밋 해설 보기 (현재 범위)"),
+    ("/review HEAD", "HEAD 커밋 해설"),
+    ("/review HEAD~3", "최근 4개 커밋 해설"),
+    ("/grade", "채점"),
     ("/answer", "답변 재진입"),
+    ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
+    ("/resume", "이전 대화 불러오기"),
+    ("/repo", "저장소 전환 (URL 또는 경로)"),
+    ("/apikey", "OpenAI API key 설정"),
     ("/help", "도움말"),
     ("/exit", "종료"),
 ]
@@ -49,7 +57,7 @@ class CommandBar(Widget):
     }
 
     CommandBar #cb-status.-answer-mode {
-        color: $success;
+        color: $text-muted;
     }
 
     CommandBar #cb-input-row {
@@ -156,6 +164,7 @@ class CommandBar(Widget):
     _history_draft: str
     _ac_candidates: list[tuple[str, str]]
     _ac_index: int
+    _showing_help: bool
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -167,6 +176,7 @@ class CommandBar(Widget):
         self._history_draft = ""
         self._ac_candidates = []
         self._ac_index = -1
+        self._showing_help = False
 
     # ------------------------------------------------------------------
     # Compose
@@ -179,7 +189,6 @@ class CommandBar(Widget):
             yield Input(placeholder="/quiz HEAD~3", id="cb-input")
         with Horizontal(id="cb-answer-row"):
             yield Static("A", id="cb-answer-prompt")
-            yield TextArea(id="cb-answer")
 
     # ------------------------------------------------------------------
     # Watchers
@@ -214,25 +223,47 @@ class CommandBar(Widget):
     def set_answer_mode(self, hint: str) -> None:
         self.status_text = hint
         self.mode = "answer"
+        # TextArea를 answer 진입 시점에 동적으로 마운트 (시작 시 IME 트리거 방지)
+        try:
+            self.query_one("#cb-answer", TextArea)
+        except Exception:
+            text_area = TextArea(id="cb-answer")
+            answer_row = self.query_one("#cb-answer-row", Horizontal)
+            answer_row.mount(text_area)
+            self.app.call_after_refresh(text_area.focus)
 
     def set_command_mode(self) -> None:
         self.mode = "command"
         self.status_text = "명령어를 입력하세요: /quiz, /grade, /help"
+        # TextArea 제거
+        try:
+            self.query_one("#cb-answer", TextArea).remove()
+        except Exception:
+            pass
 
     def get_current_answer(self) -> str:
         if self.mode == "answer":
-            return self.query_one("#cb-answer", TextArea).text
+            try:
+                return self.query_one("#cb-answer", TextArea).text
+            except Exception:
+                return ""
         return self.query_one("#cb-input", Input).value
 
     def clear_input(self) -> None:
         if self.mode == "answer":
-            self.query_one("#cb-answer", TextArea).clear()
+            try:
+                self.query_one("#cb-answer", TextArea).clear()
+            except Exception:
+                pass
         else:
             self.query_one("#cb-input", Input).value = ""
 
     def focus_input(self) -> None:
         if self.mode == "answer":
-            self.query_one("#cb-answer", TextArea).focus()
+            try:
+                self.query_one("#cb-answer", TextArea).focus()
+            except Exception:
+                pass
         else:
             self.query_one("#cb-input", Input).focus()
 
@@ -250,7 +281,10 @@ class CommandBar(Widget):
             inp.value = cmd
             inp.cursor_position = len(cmd)
         else:
-            self.app.action_focus_next()
+            try:
+                self.app.handle_tab_no_autocomplete()
+            except Exception:
+                self.app.action_focus_next()
 
     # ------------------------------------------------------------------
     # Autocomplete helpers
@@ -277,6 +311,38 @@ class CommandBar(Widget):
         except Exception:
             pass
 
+    def show_help_panel(self, lines: list[tuple[str, str]]) -> None:
+        """Show help text in the autocomplete panel area."""
+        self._ac_candidates = []
+        self._ac_index = -1
+        self._showing_help = True
+        try:
+            t = Text()
+            for i, (cmd, desc) in enumerate(lines):
+                t.append(f"   {cmd:<25}", style="bold")
+                t.append(f" {desc}", style="dim")
+                if i < len(lines) - 1:
+                    t.append("\n")
+            self.app.query_one("#cb-ac-list", Static).update(t)
+            ac = self.app.query_one("#cb-autocomplete")
+            ac.styles.height = 10
+            ac.display = True
+            self.app.query_one("#mode-bar").display = False
+            self.app.query_one("#bottom-pad").display = False
+        except Exception:
+            pass
+
+    def _close_help_panel(self) -> None:
+        self._showing_help = False
+        try:
+            ac = self.app.query_one("#cb-autocomplete")
+            ac.styles.height = 5
+            ac.display = False
+            self.app.query_one("#mode-bar").display = True
+            self.app.query_one("#bottom-pad").display = True
+        except Exception:
+            pass
+
     def _render_autocomplete(self) -> None:
         try:
             t = Text()
@@ -290,6 +356,16 @@ class CommandBar(Widget):
                 if i < len(self._ac_candidates) - 1:
                     t.append("\n")
             self.app.query_one("#cb-ac-list", Static).update(t)
+            try:
+                scroll = self.app.query_one("#cb-autocomplete")
+                visible_height = 5
+                current_top = int(scroll.scroll_y)
+                if self._ac_index >= current_top + visible_height:
+                    scroll.scroll_to(y=self._ac_index - visible_height + 1, animate=False)
+                elif self._ac_index < current_top:
+                    scroll.scroll_to(y=self._ac_index, animate=False)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -312,6 +388,11 @@ class CommandBar(Widget):
     def on_input_changed(self, event: Input.Changed) -> None:
         if self.mode != "command":
             return
+        if self._showing_help:
+            if event.value:
+                self._close_help_panel()
+            else:
+                return
         candidates = _filter_candidates(event.value)
         if candidates:
             self._open_autocomplete(candidates, 0)
@@ -353,7 +434,11 @@ class CommandBar(Widget):
                 event.stop()
                 event.prevent_default()
             elif event.key == "escape":
-                if self._ac_candidates:
+                if self._showing_help:
+                    self._close_help_panel()
+                    event.stop()
+                    event.prevent_default()
+                elif self._ac_candidates:
                     self._close_autocomplete()
                     event.stop()
                     event.prevent_default()

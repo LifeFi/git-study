@@ -10,7 +10,7 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.events import Click
+from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.message import Message
 from textual.reactive import reactive
 from textual.strip import Strip
@@ -491,6 +491,35 @@ class InlineQuizBlock(Widget):
         margin-top: 1;
         color: $text-muted;
     }
+
+    InlineQuizBlock .iqb-score {
+        height: auto;
+        margin-top: 1;
+        text-style: bold;
+        color: yellow;
+        display: none;
+    }
+
+    InlineQuizBlock .iqb-my-answer {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+        display: none;
+    }
+
+    InlineQuizBlock .iqb-model-answer {
+        height: auto;
+        margin-top: 1;
+        color: cyan;
+        display: none;
+    }
+
+    InlineQuizBlock .iqb-feedback {
+        height: auto;
+        margin-top: 1;
+        color: $text;
+        display: none;
+    }
     """
 
     class Activated(Message):
@@ -531,22 +560,49 @@ class InlineQuizBlock(Widget):
         yield Static(header_text, classes="iqb-header")
         yield Static(q.get("question", ""), classes="iqb-body")
         yield Static(self._build_status_text(), classes="iqb-status")
+        yield Static("", classes="iqb-score")
+        yield Static("", classes="iqb-my-answer")
+        yield Static("", classes="iqb-model-answer")
+        yield Static("", classes="iqb-feedback")
 
     def on_mount(self) -> None:
         self._apply_classes()
+        self._sync_grade_widgets()
 
     def _anchor_line_display(self) -> str:
         return "?"
 
     def _build_status_text(self) -> str:
-        if self._grade is not None:
-            score = self._grade.get("score", 0)
-            feedback = self._grade.get("feedback", "")
-            return f"★ {score}/10  {feedback}"
         if self._answer:
             preview = self._answer[:60] + ("..." if len(self._answer) > 60 else "")
             return f"✔ 답변: {preview}"
         return "● 답변 대기 중"
+
+    def _sync_grade_widgets(self) -> None:
+        """채점 완료 시 상세 위젯 표시, 아닌 경우 상태 텍스트만 표시."""
+        try:
+            is_graded = self._grade is not None
+            self.query_one(".iqb-status", Static).display = not is_graded
+            self.query_one(".iqb-score", Static).display = is_graded
+            self.query_one(".iqb-my-answer", Static).display = is_graded
+            self.query_one(".iqb-model-answer", Static).display = is_graded
+            self.query_one(".iqb-feedback", Static).display = is_graded
+            if is_graded:
+                score = self._grade.get("score", 0)
+                feedback = self._grade.get("feedback", "")
+                expected = self._question.get("expected_answer", "")
+                self.query_one(".iqb-score", Static).update(f"★  {score} / 100")
+                self.query_one(".iqb-my-answer", Static).update(
+                    f"내 답변:\n{self._answer or '(없음)'}"
+                )
+                self.query_one(".iqb-model-answer", Static).update(
+                    f"모범 답안:\n{expected}"
+                )
+                self.query_one(".iqb-feedback", Static).update(
+                    f"채점 이유:\n{feedback}"
+                )
+        except Exception:
+            pass
 
     def _apply_classes(self) -> None:
         self.remove_class("-active", "-answered", "-graded")
@@ -581,10 +637,31 @@ class InlineQuizBlock(Widget):
         except Exception:
             pass
         self._apply_classes()
+        self._sync_grade_widgets()
 
     @on(Click)
     def handle_click(self, event: Click) -> None:
         self.post_message(self.Activated(self._index))
+
+
+# ---------------------------------------------------------------------------
+# FileTree: Tree subclass that fixes shift+scroll horizontal direction
+# ---------------------------------------------------------------------------
+
+class FileTree(Tree):
+    def _on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        if event.shift:
+            self.scroll_right(animate=False)
+            event.stop()
+        else:
+            super()._on_mouse_scroll_down(event)
+
+    def _on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        if event.shift:
+            self.scroll_left(animate=False)
+            event.stop()
+        else:
+            super()._on_mouse_scroll_up(event)
 
 
 # ---------------------------------------------------------------------------
@@ -703,7 +780,7 @@ class InlineCodeView(Widget):
         with Horizontal(id="icv-layout"):
             with Vertical(id="file-tree-pane"):
                 yield Label("Files", id="file-tree-title")
-                yield Tree("Repository", id="file-tree")
+                yield FileTree("Repository", id="file-tree")
             with Vertical(id="code-view-pane"):
                 yield Label("", id="cv-file-label")
                 with Horizontal(id="code-area"):
@@ -714,6 +791,7 @@ class InlineCodeView(Widget):
     def on_mount(self) -> None:
         tree = self.query_one("#file-tree", Tree)
         tree.show_root = False
+
 
     # ------------------------------------------------------------------
     # Public API: repository browsing
@@ -1025,7 +1103,7 @@ class InlineCodeView(Widget):
         for anchor_line, global_idx, q in file_questions:
             # anchor_line is a target line number (1-based); convert to render_lines index
             render_anchor = target_to_render.get(anchor_line, anchor_line - 1)
-            seg_end = min(render_anchor + 1, total_lines)  # inclusive of anchor line
+            seg_end = min(render_anchor, total_lines)  # exclusive of anchor line (quiz block goes before it)
 
             if seg_end > prev_line:
                 code_text = _join_lines(render_lines[prev_line:seg_end])

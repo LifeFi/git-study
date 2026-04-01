@@ -3,6 +3,7 @@
 from rich.text import Text
 from rich.text import Text as RichText
 from textual.app import ComposeResult
+from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -25,9 +26,21 @@ class AppStatusBar(Widget):
         overflow: hidden hidden;
     }
 
-    AppStatusBar #asb-line {
+    AppStatusBar #asb-row {
         height: 1;
         padding: 0 1;
+    }
+
+    AppStatusBar #asb-line {
+        width: 1fr;
+        height: 1;
+    }
+
+    AppStatusBar #asb-notify {
+        width: auto;
+        height: 1;
+        color: $text-muted;
+        content-align: right middle;
     }
     """
 
@@ -37,10 +50,13 @@ class AppStatusBar(Widget):
     _commit_count: int = 0
     _mode: str = "idle"
     _quiz_progress: tuple[int, int] = (0, 0)
+    _notification: str = ""
 
     def compose(self) -> ComposeResult:
         yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
-        yield Static("", id="asb-line")
+        with Horizontal(id="asb-row"):
+            yield Static("", id="asb-line")
+            yield Static("", id="asb-notify")
 
     def set_repo(self, repo_name: str) -> None:
         self._repo_name = repo_name
@@ -58,6 +74,14 @@ class AppStatusBar(Widget):
 
     def set_quiz_progress(self, current: int, total: int) -> None:
         self._quiz_progress = (current, total)
+        self._refresh()
+
+    def set_notification(self, text: str) -> None:
+        self._notification = text
+        self._refresh()
+
+    def clear_notification(self) -> None:
+        self._notification = ""
         self._refresh()
 
     def _refresh(self) -> None:
@@ -86,6 +110,8 @@ class AppStatusBar(Widget):
                 "quiz_loading": "LOADING",
                 "quiz_answering": "QUIZ",
                 "grading": "GRADING",
+                "reviewing": "REVIEWING",
+                "chatting": "CHAT",
             }
             mode_label = mode_labels.get(self._mode, self._mode.upper())
             current, total = self._quiz_progress
@@ -96,5 +122,13 @@ class AppStatusBar(Widget):
                 t.append(mode_label, style="dim")
 
             widget.update(t)
+
+            notify_widget = self.query_one("#asb-notify", Static)
+            if self._notification:
+                n = Text(no_wrap=True)
+                n.append(self._notification, style="dim")
+                notify_widget.update(n)
+            else:
+                notify_widget.update("")
         except Exception:
             pass

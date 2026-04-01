@@ -15,26 +15,36 @@ from textual.widgets import Static
 
 from ..domain.code_context import get_commit_parent_sha
 from ..domain.inline_anchor import parse_file_context_blocks
+from ..domain.repo_cache import normalize_github_repo_url
 from ..domain.repo_context import (
+    DEFAULT_COMMIT_LIST_LIMIT,
     build_commit_context,
     build_multi_commit_context,
     get_commit_list_snapshot,
     get_repo,
 )
+from ..secrets import get_openai_api_key, get_secrets_path, save_openai_api_key
 from ..services.inline_grade_service import stream_inline_grade_progress
 from ..services.inline_quiz_service import stream_inline_quiz_progress
+from ..services.read_service import stream_read_progress
 from ..tui.commit_selection import CommitSelection, selected_commit_indices
 from ..tui.state import (
+    append_thread_event,
     find_local_repo_root,
     load_app_state,
+    load_chat_threads,
     load_learning_session_file,
+    load_thread_log,
     save_app_state,
+    save_chat_threads,
     save_learning_session_file,
 )
+from ..services.chat_service import stream_chat
 from ..types import InlineQuizGrade, InlineQuizQuestion
 
 from .commands import parse_command
-from .screens import CommitPickerScreen
+from .screens import CommitPickerScreen, RepoPickerScreen, ThreadPickerScreen
+from .screens.repo_picker import save_recent_local_repo
 from .widgets.app_status_bar import AppStatusBar
 from .widgets.command_bar import CommandBar
 from .widgets.history_view import HistoryView
@@ -51,10 +61,9 @@ class GitStudyAppV2(App):
         layout: vertical;
     }
 
-    /* ── Chat mode (default) ── */
     #scroll-wrapper {
         width: 1fr;
-        height: auto;
+        height: 1fr;
     }
 
     #history-view {
@@ -70,10 +79,6 @@ class GitStudyAppV2(App):
 
 
     /* ── Code mode ── */
-    Screen.-code-active #scroll-wrapper {
-        height: 1fr;
-    }
-
     Screen.-code-active #history-view {
         display: none;
     }
@@ -116,7 +121,10 @@ class GitStudyAppV2(App):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        Binding("tab", "global_tab", priority=True),
         Binding("shift+tab", "toggle_view", "Chat/Code", priority=True),
+        Binding("shift+up", "prev_question", priority=True),
+        Binding("shift+down", "next_question", priority=True),
     ]
 
     # ------------------------------------------------------------------
@@ -127,6 +135,7 @@ class GitStudyAppV2(App):
     _repo_source: str = "local"
     _github_repo_url: str | None = None
     _local_repo_root: Path | None = None
+    _original_local_root: Path | None = None  # startup시 결정된 로컬 경로 (github 전환 후에도 보존)
 
     def __init__(self, repo_path: Path | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -136,13 +145,19 @@ class GitStudyAppV2(App):
         self._grades: list[InlineQuizGrade] = []
         self._known_files: dict[str, str] = {}
         self._current_q_index: int = 0
-        self._mode: str = "idle"  # idle | quiz_loading | quiz_answering | grading
+        self._mode: str = "idle"  # idle | quiz_loading | quiz_answering | grading | reviewing | chatting
         self._oldest_sha: str = ""
         self._newest_sha: str = ""
         # CommitSelection tracks which indices are selected in the picker
         self._commit_selection: CommitSelection = CommitSelection()
+        # 커밋 목록 로드 한도 (picker에서 더 불러올 때마다 갱신됨)
+        self._commit_list_limit: int = DEFAULT_COMMIT_LIST_LIMIT
+        # 마지막으로 로드한 가장 오래된 커밋 SHA (재오픈 시 해당 커밋까지 포함되도록 보장)
+        self._commit_list_oldest_sha: str = ""
         # Current history block (Vertical) for attaching results to last command
         self._current_log_block = None
+        # Chat mode state
+        self._current_thread_id: str = ""
 
     # ------------------------------------------------------------------
     # Compose
@@ -191,6 +206,43 @@ class GitStudyAppV2(App):
             self.call_from_thread(self._log, "Git 저장소를 찾을 수 없습니다.", "error")
             return
         self._local_repo_root = root
+        self._original_local_root = root  # startup 경로 고정 (github 전환 후에도 유지)
+
+        # CLI 인자 없을 때: 이전 github 세션이 있으면 복원
+        if self._repo_path is None:
+            try:
+                global_state = load_app_state(repo_source="github")
+                if (
+                    global_state.get("repo_source") == "github"
+                    and global_state.get("github_repo_url")
+                ):
+                    github_url = global_state["github_repo_url"]
+                    self._repo_source = "github"
+                    self._github_repo_url = github_url
+                    self._local_repo_root = None
+                    self.call_from_thread(
+                        self._set_status, f"이전 GitHub 세션 복원 중: {github_url}"
+                    )
+                    try:
+                        snapshot = get_commit_list_snapshot(
+                            repo_source="github",
+                            github_repo_url=github_url,
+                            refresh_remote=False,
+                        )
+                    except Exception as exc:
+                        self.call_from_thread(
+                            self._set_status, f"GitHub 복원 실패 ({exc}), 로컬로 전환합니다."
+                        )
+                        self._repo_source = "local"
+                        self._github_repo_url = None
+                        self._local_repo_root = root
+                    else:
+                        commits = snapshot.get("commits", [])
+                        self.call_from_thread(self._apply_commits, commits, global_state)
+                        return
+            except Exception:
+                pass
+
         try:
             snapshot = get_commit_list_snapshot(
                 repo_source="local",
@@ -220,6 +272,8 @@ class GitStudyAppV2(App):
             self._set_status("커밋이 없습니다.")
             self._log("커밋이 없습니다.", "error")
             return
+        prev_oldest = self._oldest_sha
+        prev_newest = self._newest_sha
 
         # Phase 3: restore saved SHA range, fall back to HEAD
         saved_oldest = saved_state.get("selected_range_start_sha", "")
@@ -256,7 +310,7 @@ class GitStudyAppV2(App):
         # Update AppStatusBar repo name and initial range
         try:
             status_bar = self.query_one("#app-status", AppStatusBar)
-            status_bar.set_repo(self._local_repo_root.name)
+            status_bar.set_repo(self._repo_display_name())
             if self._oldest_sha and self._newest_sha:
                 sha_index = {c.get("sha", ""): i for i, c in enumerate(commits)}
                 o_idx = sha_index.get(self._oldest_sha, 0)
@@ -266,7 +320,17 @@ class GitStudyAppV2(App):
         except Exception:
             pass
 
-        self._log(f"저장소 로드 완료 ({len(commits)} commits)", "success")
+        # 커밋 범위가 바뀐 경우 구분선 삽입 (챗은 유지)
+        if prev_oldest and (prev_oldest != self._oldest_sha or prev_newest != self._newest_sha):
+            try:
+                hv = self.query_one("#history-view", HistoryView)
+                label = f"{self._oldest_sha[:7]}..{self._newest_sha[:7]}"
+                hv.append_separator(f"─── 커밋 범위 변경: {label} ───")
+            except Exception:
+                pass
+
+        # 현재 repo_source + URL/경로를 state에 저장 (재시작 시 복원용)
+        self._save_app_state()
 
         # Phase 4: restore quiz session if exists for this range
         session_restored = self._try_restore_session()
@@ -281,11 +345,15 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def on_command_bar_command_submitted(self, event: CommandBar.CommandSubmitted) -> None:
-        self._log_command(event.text)
         cmd = parse_command(event.text)
+        # chat 메시지는 command 스타일로 로깅하지 않음 (append_user_message로 처리)
+        if cmd.kind != "chat":
+            self._log_command(event.text)
         match cmd.kind:
             case "quiz":
                 self._start_quiz(cmd.range_arg)
+            case "review":
+                self._start_review(cmd.range_arg, log_block=self._current_log_block)
             case "grade":
                 self._start_grading()
             case "help":
@@ -294,8 +362,18 @@ class GitStudyAppV2(App):
                 self._open_commit_picker()
             case "answer":
                 self._resume_answer_mode()
+            case "repo":
+                self._handle_repo_command(cmd.range_arg)
+            case "apikey":
+                self._handle_apikey_command(cmd.range_arg)
             case "exit":
                 self.exit()
+            case "chat":
+                self._start_chat(cmd.range_arg)
+            case "clear":
+                self._handle_clear()
+            case "resume":
+                self._handle_resume()
             case _:
                 self._set_status(f"알 수 없는 명령: {cmd.raw}")
 
@@ -360,15 +438,21 @@ class GitStudyAppV2(App):
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.focus_input()
 
-    def on_command_bar_prev_question(self, event: CommandBar.PrevQuestion) -> None:
+    def action_prev_question(self) -> None:
         if self._questions:
             self._current_q_index = (self._current_q_index - 1) % len(self._questions)
             self._resume_answer_mode()
 
-    def on_command_bar_next_question(self, event: CommandBar.NextQuestion) -> None:
+    def action_next_question(self) -> None:
         if self._questions:
             self._current_q_index = (self._current_q_index + 1) % len(self._questions)
             self._resume_answer_mode()
+
+    def on_command_bar_prev_question(self, event: CommandBar.PrevQuestion) -> None:
+        self.action_prev_question()
+
+    def on_command_bar_next_question(self, event: CommandBar.NextQuestion) -> None:
+        self.action_next_question()
 
     def on_command_bar_answer_exited(self, event: CommandBar.AnswerExited) -> None:
         self._set_mode("idle")
@@ -410,18 +494,43 @@ class GitStudyAppV2(App):
     def _refresh_and_open_picker(self) -> None:
         try:
             snapshot = get_commit_list_snapshot(
+                limit=self._commit_list_limit,
                 repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url,
                 refresh_remote=False,
                 local_repo_root=self._local_repo_root,
             )
+            # 이전에 로드했던 가장 오래된 커밋이 결과에 없으면 (새 커밋이 밀어낸 경우)
+            # 해당 SHA가 포함될 때까지 limit을 늘려 재fetch
+            oldest_sha = self._commit_list_oldest_sha
+            if oldest_sha and snapshot.get("has_more_commits"):
+                loaded_shas = {c["sha"] for c in snapshot.get("commits", [])}
+                if oldest_sha not in loaded_shas:
+                    total = snapshot.get("total_commit_count", self._commit_list_limit)
+                    extended = self._commit_list_limit + DEFAULT_COMMIT_LIST_LIMIT
+                    while extended <= total:
+                        ext_snapshot = get_commit_list_snapshot(
+                            limit=extended,
+                            repo_source=self._repo_source,
+                            github_repo_url=self._github_repo_url,
+                            refresh_remote=False,
+                            local_repo_root=self._local_repo_root,
+                        )
+                        snapshot = ext_snapshot
+                        loaded_shas = {c["sha"] for c in snapshot.get("commits", [])}
+                        if oldest_sha in loaded_shas:
+                            self._commit_list_limit = extended
+                            break
+                        extended += DEFAULT_COMMIT_LIST_LIMIT
             fresh_commits = snapshot.get("commits", [])
         except Exception as exc:
             self.call_from_thread(self._set_status, f"커밋 갱신 실패: {exc}")
             fresh_commits = []
+            snapshot = {}
 
-        self.call_from_thread(self._do_open_picker, fresh_commits)
+        self.call_from_thread(self._do_open_picker, fresh_commits, snapshot)
 
-    def _do_open_picker(self, fresh_commits: list[dict]) -> None:
+    def _do_open_picker(self, fresh_commits: list[dict], snapshot: dict) -> None:
         if fresh_commits:
             self._commits = fresh_commits  # 메인 스레드에서 reactive 업데이트
         if not self._commits:
@@ -436,11 +545,13 @@ class GitStudyAppV2(App):
                 repo_source=self._repo_source,
                 github_repo_url=self._github_repo_url or "",
                 local_repo_root=self._local_repo_root,
+                has_more=snapshot.get("has_more_commits", False),
+                total_count=snapshot.get("total_commit_count", len(self._commits)),
             ),
             callback=self._on_commit_picker_result,
         )
 
-    def _on_commit_picker_result(self, result: CommitSelection | None) -> None:
+    def _on_commit_picker_result(self, result: tuple[CommitSelection, list[dict]] | None) -> None:
         if result is None:
             self._set_status(
                 f"커밋 범위: {self._oldest_sha[:7]}..{self._newest_sha[:7]}  |  "
@@ -449,6 +560,15 @@ class GitStudyAppV2(App):
                 else "명령어를 입력하세요: /quiz, /grade, /help"
             )
             return
+        selection, updated_commits = result
+        # picker에서 커밋을 더 불러왔을 수 있으므로 앱 커밋 목록 및 limit 동기화
+        if len(updated_commits) > len(self._commits):
+            self._commits = updated_commits
+        self._commit_list_limit = max(self._commit_list_limit, len(updated_commits))
+        # 마지막으로 로드한 가장 오래된 커밋 SHA 저장 (다음 오픈 시 해당 커밋까지 보장)
+        if updated_commits:
+            self._commit_list_oldest_sha = updated_commits[-1]["sha"]
+        result = selection
         if result.start_index is None:
             self._set_status("커밋이 선택되지 않았습니다.")
             return
@@ -615,9 +735,8 @@ class GitStudyAppV2(App):
             current_index=0,
         )
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
-        cmd_bar.set_answer_mode(
-            f"Q1/{total}  |  [Shift+Enter] 제출  [Esc] 종료"
-        )
+        self._update_answer_status()
+        cmd_bar.set_answer_mode(cmd_bar.status_text)
         cmd_bar.focus_input()
 
     def _show_range_in_view(self, oldest_sha: str, newest_sha: str) -> None:
@@ -639,6 +758,81 @@ class GitStudyAppV2(App):
             self.query_one("#app-status", AppStatusBar).set_range(oldest_sha, newest_sha, count)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Review (commit reading material)
+    # ------------------------------------------------------------------
+
+    @work(thread=True)
+    def _start_review(self, range_arg: str, log_block=None) -> None:
+        if self._mode in ("quiz_loading", "grading", "reviewing"):
+            self.call_from_thread(self._set_status, "이미 작업이 진행 중입니다.")
+            return
+        self.call_from_thread(self._set_mode, "reviewing")
+        self.call_from_thread(self._show_chat_view)
+        self.call_from_thread(self._set_status, "리뷰 준비 중...")
+
+        try:
+            oldest_sha, newest_sha = self._resolve_range(range_arg)
+        except Exception as exc:
+            self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._set_status, f"범위 해석 실패: {exc}")
+            self.call_from_thread(self._log, f"범위 해석 실패: {exc}", "error")
+            return
+
+        self._oldest_sha = oldest_sha
+        self._newest_sha = newest_sha
+        self.call_from_thread(self._sync_commit_selection, oldest_sha, newest_sha)
+
+        try:
+            repo = get_repo(
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url,
+                refresh_remote=False,
+                local_repo_root=self._local_repo_root,
+            )
+            commit_shas = self._collect_shas_in_range(repo, oldest_sha, newest_sha)
+            commits = [repo.commit(sha) for sha in commit_shas]
+            if len(commits) == 1:
+                context = build_commit_context(commits[0], "selected", repo)
+            else:
+                context = build_multi_commit_context(commits, "range_selected", repo)
+        except Exception as exc:
+            self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._set_status, f"커밋 컨텍스트 생성 실패: {exc}")
+            self.call_from_thread(self._log, f"컨텍스트 생성 실패: {exc}", "error")
+            return
+
+        self.call_from_thread(self._set_status, "리뷰 생성 중...")
+        final_output = ""
+        try:
+            for event in stream_read_progress(context):
+                if event.get("type") == "node":
+                    label = event.get("label", event.get("node", ""))
+                    self.call_from_thread(self._set_status, f"리뷰 생성 중... {label}")
+                elif event.get("type") == "result":
+                    final_output = event.get("result", {}).get("final_output", "")
+        except Exception as exc:
+            self.call_from_thread(self._set_mode, "idle")
+            self.call_from_thread(self._set_status, f"리뷰 생성 실패: {exc}")
+            self.call_from_thread(self._log, f"리뷰 생성 실패: {exc}", "error")
+            return
+
+        self.call_from_thread(self._set_mode, "idle")
+        if final_output:
+            self.call_from_thread(self._render_review, final_output, log_block)
+            self.call_from_thread(self._set_status, "리뷰 완료.")
+        else:
+            self.call_from_thread(self._log, "리뷰 내용이 생성되지 않았습니다.", "error")
+            self.call_from_thread(self._set_status, "리뷰 생성 실패.")
+
+    def _render_review(self, md_text: str, log_block=None) -> None:
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            hv.append_markdown(md_text, block=log_block)
+        except Exception:
+            pass
+        self._log_chat("app_markdown", md_text)
 
     # ------------------------------------------------------------------
     # Grading
@@ -692,21 +886,154 @@ class GitStudyAppV2(App):
         avg = sum(scores) / len(scores) if scores else 0
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.set_command_mode()
-        cmd_bar.status_text = f"채점 완료! 평균 {avg:.1f}/10  ({len(grades)}문제)"
-        self._log(f"채점 완료! 평균 {avg:.1f}/10  ({len(grades)}문제)", "success")
+        cmd_bar.status_text = f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)"
+        self._log(f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)", "success")
 
     # ------------------------------------------------------------------
     # Help
     # ------------------------------------------------------------------
 
     def _show_help(self) -> None:
-        self._set_status(
-            "/commits - 커밋 범위 선택  |  "
-            "/quiz [범위] - 퀴즈 생성 (예: /quiz HEAD~3)  |  "
-            "/grade - 채점  |  "
-            "/help - 도움말  |  "
-            "Ctrl+Q - 종료"
+        cmd_bar = self.query_one("#cmd-bar", CommandBar)
+        cmd_bar.show_help_panel([
+            ("/commits", "커밋 범위 선택"),
+            ("/quiz [범위]", "퀴즈 생성 (예: /quiz HEAD~3)"),
+            ("/grade", "채점"),
+            ("/answer", "답변 재진입"),
+            ("/review [범위]", "커밋 해설 보기"),
+            ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
+            ("/resume", "이전 대화 불러오기"),
+            ("/repo [URL/경로]", "저장소 전환 (인자 없으면 목록 모달)"),
+            ("/apikey [key]", "OpenAI API key 설정 (인자 없으면 상태 표시)"),
+            ("/help", "도움말"),
+            ("Ctrl+Q", "종료"),
+        ])
+
+    # ------------------------------------------------------------------
+    # Repo switching
+    # ------------------------------------------------------------------
+
+    def _handle_repo_command(self, arg: str) -> None:
+        arg = arg.strip()
+        if arg:
+            self._switch_repo(arg)
+        else:
+            self._open_repo_picker()
+
+    def _open_repo_picker(self) -> None:
+        # _original_local_root: github 전환 후에도 startup 경로를 보존
+        local_root = self._original_local_root or self._local_repo_root
+        self.push_screen(
+            RepoPickerScreen(
+                current_local_root=local_root,
+                current_repo_source=self._repo_source,
+                current_github_url=self._github_repo_url,
+            ),
+            callback=self._on_repo_picker_result,
         )
+
+    def _on_repo_picker_result(self, result: tuple[str, str] | None) -> None:
+        if result is None:
+            return
+        repo_source, url_or_path = result
+        self._switch_repo_impl(repo_source, url_or_path)
+
+    def _switch_repo(self, arg: str) -> None:
+        """Parse argument and dispatch to _switch_repo_impl."""
+        if arg.startswith("http") or arg.startswith("github.com"):
+            try:
+                url = normalize_github_repo_url(arg)
+                self._switch_repo_impl("github", url)
+            except ValueError as exc:
+                self._set_status(f"잘못된 URL: {exc}")
+        else:
+            path = Path(arg).expanduser().resolve()
+            self._switch_repo_impl("local", str(path))
+
+    @work(thread=True)
+    def _switch_repo_impl(self, repo_source: str, url_or_path: str) -> None:
+        """Switch to a new repo (background thread)."""
+        self.call_from_thread(self._set_status, f"저장소 전환 중... {url_or_path}")
+        self.call_from_thread(self._reset_quiz_state)
+        # repo 변경: 챗 상태 + 히스토리 뷰 초기화
+        self._current_thread_id = ""
+        self._oldest_sha = ""
+        self._newest_sha = ""
+        self.call_from_thread(self._clear_history_view)
+
+        if repo_source == "github":
+            self._repo_source = "github"
+            self._github_repo_url = url_or_path
+            self._local_repo_root = None
+        else:
+            root = find_local_repo_root(start=Path(url_or_path))
+            if root is None:
+                self.call_from_thread(
+                    self._set_status,
+                    f"Git 저장소를 찾을 수 없습니다: {url_or_path}",
+                )
+                return
+            self._repo_source = "local"
+            self._local_repo_root = root
+            self._github_repo_url = None
+
+        try:
+            snapshot = get_commit_list_snapshot(
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url,
+                refresh_remote=(self._repo_source == "github"),
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception as exc:
+            self.call_from_thread(self._set_status, f"커밋 로드 실패: {exc}")
+            return
+
+        commits = snapshot.get("commits", [])
+
+        # Persist the recently used local repo
+        if self._repo_source == "local" and self._local_repo_root:
+            try:
+                save_recent_local_repo(str(self._local_repo_root))
+            except Exception:
+                pass
+
+        try:
+            saved_state = load_app_state(
+                repo_source=self._repo_source,
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            saved_state = {}
+
+        self.call_from_thread(self._apply_commits, commits, saved_state)
+
+    # ------------------------------------------------------------------
+    # API key management
+    # ------------------------------------------------------------------
+
+    def _handle_apikey_command(self, arg: str) -> None:
+        arg = arg.strip()
+        if arg:
+            self._set_api_key(arg)
+        else:
+            key, source = get_openai_api_key()
+            if source == "missing":
+                self._set_status("API key 없음. /apikey <key> 로 설정하세요.")
+            else:
+                masked = f"{key[:8]}..." if key and len(key) > 8 else "(설정됨)"
+                if source == "file":
+                    self._set_status(f"현재 API key: {masked}  (출처: file — {get_secrets_path()})")
+                else:
+                    self._set_status(f"현재 API key: {masked}  (출처: {source})")
+
+    def _set_api_key(self, key: str) -> None:
+        try:
+            save_openai_api_key(key)
+            masked = f"{key[:8]}..." if len(key) > 8 else "(설정됨)"
+            self._set_status(f"API key 저장됨: {masked}  (~/.git-study/secrets.json)")
+            self._log("OpenAI API key 저장 완료.", "success")
+        except Exception as exc:
+            self._set_status(f"API key 저장 실패: {exc}")
 
     # ------------------------------------------------------------------
     # Range resolution
@@ -793,7 +1120,7 @@ class GitStudyAppV2(App):
             self._commit_selection = CommitSelection(start_index=newest_idx, end_index=oldest_idx)
 
     def _save_app_state(self) -> None:
-        if self._local_repo_root is None:
+        if self._repo_source == "local" and self._local_repo_root is None:
             return
         try:
             save_app_state(
@@ -811,6 +1138,22 @@ class GitStudyAppV2(App):
                 selected_range_end_sha=self._newest_sha,
                 local_repo_root=self._local_repo_root,
             )
+            # local 모드로 전환된 경우 global state 파일에도 repo_source="local" 기록
+            # (그렇지 않으면 재시작 시 이전 github URL로 잘못 복원됨)
+            if self._repo_source == "local":
+                from ..tui.state import get_app_state_path
+                import json as _json
+                global_state_path = get_app_state_path(repo_source="github")
+                try:
+                    existing = _json.loads(global_state_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+                existing["repo_source"] = "local"
+                existing["github_repo_url"] = ""
+                global_state_path.parent.mkdir(parents=True, exist_ok=True)
+                global_state_path.write_text(
+                    _json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
         except Exception:
             pass
 
@@ -875,6 +1218,10 @@ class GitStudyAppV2(App):
         sid = self._session_id()
         if not sid:
             return False
+
+        # 챗 스레드 복원은 퀴즈 세션 여부와 무관하게 항상 시도
+        self._restore_chat_thread(sid)
+
         try:
             payload = load_learning_session_file(
                 sid,
@@ -910,6 +1257,8 @@ class GitStudyAppV2(App):
         )
         self._show_code_view()
 
+        # 앱 이벤트 로그 + 채팅 스레드 복원은 _restore_chat_thread()에서 이미 처리됨
+
         if self._grades:
             self._set_mode("idle")
             self._restore_graded_view()
@@ -928,6 +1277,367 @@ class GitStudyAppV2(App):
 
         return True
 
+    def _restore_chat_thread(self, sid: str) -> None:
+        """재시작 시 thread_id 복원(없으면 신규 생성) + thread_log 재생."""
+        try:
+            threads_data = load_chat_threads(
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+            current_tid = threads_data.get("current", "")
+            if not current_tid:
+                current_tid = self._create_new_thread(threads_data)
+            self._current_thread_id = current_tid
+        except Exception:
+            pass
+
+        # thread_log 재생 — 마지막 "cleared" 이후 이벤트만
+        try:
+            if not self._current_thread_id:
+                return
+            thread_log = load_thread_log(
+                self._current_thread_id,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+            if thread_log:
+                last_clear = max(
+                    (i for i, e in enumerate(thread_log) if e.get("kind") == "cleared"),
+                    default=-1,
+                )
+                hv = self.query_one("#history-view", HistoryView)
+                self._replay_thread_log(hv, thread_log[last_clear + 1:])
+        except Exception:
+            pass
+
+    def _replay_thread_log(self, hv: HistoryView, events: list[dict]) -> None:
+        """thread_log 이벤트를 HistoryView에 재생한다 (채팅 + UI 명령 이벤트 통합)."""
+        block = None
+        for event in events:
+            kind = event.get("kind", "")
+            content = event.get("content", "")
+            style = event.get("style", "info")
+            match kind:
+                case "user_message":
+                    block = hv.append_user_message(content)
+                case "assistant_message":
+                    if content.strip():
+                        hv.append_markdown(content, block=block)
+                case "tool_call":
+                    name = event.get("data", {}).get("name", content)
+                    hv.append_tool_call(name, block=block)
+                case "app_command" | "command":
+                    block = hv.append_command(content)
+                case "app_result" | "result":
+                    hv.append_result(content, style, block=block)
+                case "app_markdown" | "markdown":
+                    hv.append_markdown(content, block=block)
+                case "separator":
+                    hv.append_separator(content)
+                case "cleared":
+                    pass  # 슬라이싱으로 처리되므로 여기에 도달하지 않음
+
+    # ------------------------------------------------------------------
+    # Chat mode
+    # ------------------------------------------------------------------
+
+    def _create_new_thread(self, threads_data: dict) -> str:
+        """신규 thread_id를 생성해 threads_data에 추가하고 저장 후 반환."""
+        tid = time.strftime("%Y%m%d%H%M%S")
+        count = len(threads_data.get("threads", [])) + 1
+        threads_data["current"] = tid
+        threads_data.setdefault("threads", []).append({
+            "id": tid,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "label": f"대화 {count}",
+        })
+        try:
+            save_chat_threads(
+                threads_data,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            pass
+        return tid
+
+    def _ensure_thread_id(self) -> str | None:
+        """활성 thread_id를 반환. 없으면 새로 생성."""
+        if self._current_thread_id:
+            return self._current_thread_id
+        threads_data = load_chat_threads(
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+            local_repo_root=self._local_repo_root,
+        )
+        tid = self._create_new_thread(threads_data)
+        self._current_thread_id = tid
+        return tid
+
+    def _build_commit_context(self) -> str:
+        """LLM 시스템 프롬프트용 커밋 컨텍스트 문자열 생성."""
+        if not self._oldest_sha:
+            return ""
+        lines = [
+            "당신은 Git 커밋을 분석하는 코드 학습 도우미입니다.",
+            f"현재 선택된 커밋 범위: {self._oldest_sha[:7]}..{self._newest_sha[:7]}",
+            "사용자의 질문에 한국어로 답변하세요.",
+            "필요하면 get_file_content 도구를 사용해 파일 내용을 확인하세요.",
+        ]
+        return "\n".join(lines)
+
+    def _build_commit_diff_context(self) -> str:
+        """코드 리뷰어 에이전트용 커밋 범위 컨텍스트 문자열 생성."""
+        if not self._oldest_sha:
+            return ""
+        return f"커밋 범위: {self._oldest_sha[:7]}..{self._newest_sha[:7]}"
+
+    def _build_quiz_context(self) -> str:
+        """퀴즈 튜터 에이전트용 퀴즈 문항 컨텍스트 문자열 생성."""
+        if not self._questions:
+            return ""
+        lines = []
+        for i, q in enumerate(self._questions, 1):
+            file_info = f"{q.get('file_path', '')}:{q.get('anchor_line', '')}"
+            lines.append(f"Q{i}. [{file_info}] {q.get('question', '')}")
+            lines.append(f"    예상 답변: {q.get('expected_answer', '')}")
+        return "\n".join(lines)
+
+    @work(thread=True)
+    def _start_chat(self, user_text: str) -> None:
+        """채팅 메시지를 LLM으로 전송하고 스트리밍 응답을 표시."""
+        if not user_text.strip():
+            return
+
+        tid = self._ensure_thread_id()
+        if not tid:
+            return
+
+        self.call_from_thread(self._set_mode, "chatting")
+        self.call_from_thread(self._show_chat_view)
+
+        # HistoryView에 유저 메시지 표시
+        # streaming 위젯은 route 이벤트 후에 생성 (에이전트 라벨이 위에 오도록)
+        block_holder: list = []
+
+        def _mount_user_msg():
+            hv = self.query_one("#history-view", HistoryView)
+            block = hv.append_user_message(user_text)
+            block_holder.append((hv, block, None))  # streaming은 나중에 설정
+
+        self.call_from_thread(_mount_user_msg)
+
+        # 유저 메시지 thread log에 저장
+        try:
+            append_thread_event(
+                tid,
+                {"kind": "user_message", "content": user_text, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            pass
+
+        commit_context = self._build_commit_context()
+        quiz_context = self._build_quiz_context()
+        commit_diff_context = self._build_commit_diff_context()
+        accumulated = ""
+
+        def _ensure_streaming():
+            """streaming 위젯이 없으면 생성. 메인 스레드에서 호출."""
+            if not block_holder:
+                return
+            hv, block, streaming = block_holder[0]
+            if streaming is None:
+                sw = hv.begin_streaming(block)
+                block_holder[0] = (hv, block, sw)
+
+        for event in stream_chat(
+            thread_id=tid,
+            user_text=user_text,
+            commit_context=commit_context,
+            quiz_context=quiz_context,
+            commit_diff_context=commit_diff_context,
+            oldest_sha=self._oldest_sha,
+            newest_sha=self._newest_sha,
+            local_repo_root=self._local_repo_root,
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+        ):
+            if not block_holder:
+                continue
+
+            etype = event.get("type", "")
+            if etype == "route":
+                label = event.get("label", "")
+                def _add_route_then_streaming(lbl=label):
+                    if not block_holder:
+                        return
+                    hv, block, _ = block_holder[0]
+                    hv.append_result(f"→ {lbl}", "info", block)
+                    sw = hv.begin_streaming(block)
+                    block_holder[0] = (hv, block, sw)
+                self.call_from_thread(_add_route_then_streaming)
+            elif etype == "token":
+                accumulated += event.get("content", "")
+                acc = accumulated
+                def _update_token(a=acc):
+                    _ensure_streaming()
+                    if not block_holder:
+                        return
+                    hv, block, streaming = block_holder[0]
+                    if streaming is not None:
+                        hv.update_streaming(streaming, a)
+                self.call_from_thread(_update_token)
+            elif etype == "tool_call":
+                name = event.get("name", "")
+                def _add_tool(n=name):
+                    if not block_holder:
+                        return
+                    hv, block, _ = block_holder[0]
+                    hv.append_tool_call(n, block)
+                self.call_from_thread(_add_tool)
+                try:
+                    append_thread_event(
+                        tid,
+                        {"kind": "tool_call", "content": name, "data": {"name": name, "args": event.get("args", {})}, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                        repo_source=self._repo_source,
+                        github_repo_url=self._github_repo_url or "",
+                        local_repo_root=self._local_repo_root,
+                    )
+                except Exception:
+                    pass
+            elif etype == "done":
+                full = event.get("full_content", accumulated)
+                def _finish(f=full):
+                    _ensure_streaming()
+                    if not block_holder:
+                        return
+                    hv, block, streaming = block_holder[0]
+                    if streaming is not None:
+                        hv.end_streaming(block, streaming, f)
+                self.call_from_thread(_finish)
+                try:
+                    append_thread_event(
+                        tid,
+                        {"kind": "assistant_message", "content": full, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                        repo_source=self._repo_source,
+                        github_repo_url=self._github_repo_url or "",
+                        local_repo_root=self._local_repo_root,
+                    )
+                except Exception:
+                    pass
+                self.call_from_thread(self._set_mode, "idle")
+                self.call_from_thread(self._set_status, "답변 완료.")
+                return
+            elif etype == "error":
+                err = event.get("content", "오류 발생")
+                def _on_error():
+                    if block_holder:
+                        hv, block, streaming = block_holder[0]
+                        if streaming is not None:
+                            hv.end_streaming(block, streaming, "")
+                self.call_from_thread(_on_error)
+                self.call_from_thread(self._log, f"채팅 오류: {err}", "error")
+                self.call_from_thread(self._set_mode, "idle")
+                return
+
+    def _handle_clear(self) -> None:
+        """/clear: 새 thread_id 생성 + 화면 초기화. 이전 대화는 /resume 으로 복원 가능."""
+        try:
+            threads_data = load_chat_threads(
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+            new_tid = self._create_new_thread(threads_data)
+            self._current_thread_id = new_tid
+        except Exception:
+            self._current_thread_id = time.strftime("%Y%m%d%H%M%S")
+        self._clear_history_view()
+        self._set_status("대화가 초기화됐습니다. /resume 으로 이전 대화를 불러올 수 있습니다.")
+
+    def _handle_resume(self) -> None:
+        """/resume: 이전 대화 목록 모달 표시 후 선택한 thread로 전환."""
+        threads_data = load_chat_threads(
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+            local_repo_root=self._local_repo_root,
+        )
+        threads = threads_data.get("threads", [])
+        if not threads:
+            self._set_status("이전 대화가 없습니다.")
+            return
+
+        # msg_count + 미리보기 추가
+        for t in threads:
+            msg_count, previews = self._get_thread_summary(t["id"])
+            t["msg_count"] = msg_count
+            t["previews"] = previews
+
+        self.push_screen(
+            ThreadPickerScreen(threads, self._current_thread_id),
+            callback=self._on_thread_picker_result,
+        )
+
+    def _on_thread_picker_result(self, result: dict | None) -> None:
+        if result is None:
+            return
+        threads_data = load_chat_threads(
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+            local_repo_root=self._local_repo_root,
+        )
+        self._current_thread_id = result["id"]
+        threads_data["current"] = result["id"]
+        try:
+            save_chat_threads(
+                threads_data,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            pass
+
+        thread_log = load_thread_log(
+            result["id"],
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+            local_repo_root=self._local_repo_root,
+        )
+        self._clear_history_view()
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            self._replay_thread_log(hv, thread_log)
+            hv.append_separator(f"─── {result['label']} 재개 ───")
+        except Exception:
+            pass
+        self._set_status(f"{result['label']} 재개됨.")
+
+    def _get_thread_summary(self, thread_id: str) -> tuple[int, list[str]]:
+        """thread log에서 (user_message 수, 최근 2개 미리보기) 반환."""
+        try:
+            log = load_thread_log(
+                thread_id,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+            user_msgs = [e for e in log if e.get("kind") == "user_message"]
+            count = len(user_msgs)
+            previews = []
+            for e in user_msgs[:2]:
+                raw = e.get("content", "").strip().replace("\n", " ")
+                previews.append(raw[:60] + ("…" if len(raw) > 60 else ""))
+            return count, previews
+        except Exception:
+            return 0, []
+
     def _restore_graded_view(self) -> None:
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.load_inline_quiz(
@@ -940,7 +1650,7 @@ class GitStudyAppV2(App):
         scores = [g.get("score", 0) for g in self._grades]
         avg = sum(scores) / len(scores) if scores else 0
         self._set_status(
-            f"이전 세션 복원됨. 채점 완료 — 평균 {avg:.1f}/10 ({len(self._grades)}문제). "
+            f"이전 세션 복원됨. 채점 완료 — 평균 {avg:.1f}/100 ({len(self._grades)}문제). "
             "/quiz 로 새 퀴즈 생성."
         )
 
@@ -952,10 +1662,6 @@ class GitStudyAppV2(App):
             grades=self._grades,
             known_files=self._known_files,
             current_index=0,
-        )
-        self._set_status(
-            f"이전 세션 복원됨. 모든 답변 완료 ({len(self._questions)}문제). "
-            "/grade 로 채점하세요."
         )
 
     def _restore_answering_view(self) -> None:
@@ -976,17 +1682,20 @@ class GitStudyAppV2(App):
         except Exception:
             pass
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
-        cmd_bar.set_answer_mode(
-            f"Q{self._current_q_index + 1}/{total}  |  [Shift+Enter] 제출  [Esc] 종료"
-        )
+        self._update_answer_status()
+        cmd_bar.set_answer_mode(cmd_bar.status_text)
         cmd_bar.focus_input()
-        self._set_status(
-            f"이전 세션 복원됨. {answered}/{total} 답변 완료."
-        )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _repo_display_name(self) -> str:
+        if self._repo_source == "github" and self._github_repo_url:
+            return self._github_repo_url.split("github.com/")[-1].rstrip("/").removesuffix(".git")
+        if self._local_repo_root:
+            return self._local_repo_root.name
+        return "unknown"
 
     def _mode_bar_text(self, code_active: bool = False) -> RichText:
         t = RichText()
@@ -1016,6 +1725,12 @@ class GitStudyAppV2(App):
             pass
         self._update_mode_bar()
 
+    def _clear_history_view(self) -> None:
+        try:
+            self.query_one("#history-view", HistoryView).clear()
+        except Exception:
+            pass
+
     def _show_chat_view(self) -> None:
         """Switch to chat mode."""
         try:
@@ -1030,6 +1745,31 @@ class GitStudyAppV2(App):
         except Exception:
             return False
 
+    def action_global_tab(self) -> None:
+        """App-level Tab: code view → panel cycle, chat mode → scroll+focus cmd-bar."""
+        if self._is_code_view_active():
+            # 코드 뷰에서는 패널 이동 유지
+            self.action_focus_next()
+            return
+        # 챗 모드: 자동완성 열려 있으면 CommandBar에 위임, 아니면 스크롤+포커스
+        cmd_bar = self.query_one("#cmd-bar", CommandBar)
+        if cmd_bar._ac_candidates:
+            cmd_bar.action_tab_pressed()
+        else:
+            self.handle_tab_no_autocomplete()
+
+    def handle_tab_no_autocomplete(self) -> None:
+        """챗 모드 Tab: 히스토리 최하단 스크롤 + cmd-bar 포커스."""
+        # 스크롤을 먼저 — focus_input()이 레이아웃 갱신을 유발해 스크롤을 덮어쓰는 것을 방지
+        try:
+            self.query_one("#scroll-wrapper").scroll_end(animate=False)
+        except Exception:
+            pass
+        # 이미 포커스가 있으면 재포커스 생략 (레이아웃 갱신 최소화)
+        focused = self.focused
+        if focused is None or getattr(focused, "id", None) not in ("cb-input", "cb-answer"):
+            self.query_one("#cmd-bar", CommandBar).focus_input()
+
     def _has_code_content(self) -> bool:
         """Return True if commits have been selected and code view has content."""
         return bool(self._oldest_sha and self._newest_sha)
@@ -1043,6 +1783,30 @@ class GitStudyAppV2(App):
                 self._show_code_view()
             else:
                 self._set_status("선택된 커밋이 없습니다. /commits 로 커밋을 선택하세요.")
+        self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
+
+    def _log_chat(self, kind: str, content: str, style: str = "") -> None:
+        """thread_log.jsonl에 UI 이벤트를 기록한다 (thread_id 미확정 시 무시)."""
+        tid = self._current_thread_id
+        if not tid:
+            return
+        event: dict = {
+            "kind": kind,
+            "content": content,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        if style:
+            event["style"] = style
+        try:
+            append_thread_event(
+                tid,
+                event,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            pass
 
     def _log_command(self, cmd: str) -> None:
         """Append a command row to history and set as current block for results."""
@@ -1051,6 +1815,7 @@ class GitStudyAppV2(App):
             self._current_log_block = hv.append_command(cmd)
         except Exception:
             pass
+        self._log_chat("app_command", cmd)
 
     def _log(self, text: str, style: str = "info") -> None:
         """Append a result row. If there's a current command block, attaches there; otherwise standalone."""
@@ -1062,6 +1827,7 @@ class GitStudyAppV2(App):
                 hv.append(text, style)
         except Exception:
             pass
+        self._log_chat("app_result", text, style)
 
     def _set_status(self, text: str) -> None:
         try:
@@ -1084,7 +1850,7 @@ class GitStudyAppV2(App):
         fpath = self._questions[q].get("file_path", "") if q < total else ""
         fname = fpath.split("/")[-1] if fpath else ""
         file_info = f"  ·  {fname}" if fname else ""
-        hint = f"Q{q + 1}/{total}{file_info}  [dim]\\[Shift+Enter] 제출  \\[Shift+↑↓] 이동  \\[Esc] 종료[/dim]"
+        hint = f"Q{q + 1}/{total}{file_info}  [dim]Shift+Enter 제출 | Shift+↑↓ 이동 | Esc 종료[/dim]"
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         # mode는 이미 "answer"이므로 set_answer_mode 대신 status_text 직접 설정
         # (reactive가 동일 mode값 재할당 시 후속 업데이트를 무시할 수 있음)
@@ -1094,6 +1860,8 @@ class GitStudyAppV2(App):
 def run_v2() -> None:
     """Entry point for git-study-v2."""
     import argparse
+    from dotenv import load_dotenv
+    load_dotenv()
     parser = argparse.ArgumentParser(prog="git-study-v2")
     parser.add_argument(
         "path",

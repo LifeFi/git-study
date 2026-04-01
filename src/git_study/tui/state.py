@@ -84,6 +84,148 @@ def get_session_repo_dir(
     return session_root / "github" / slugify_repo_url(normalized)
 
 
+
+def get_chat_db_path(
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    """
+    local:  {repo_root}/.git-study/chat.db
+    github: ~/.git-study/chats/github/{slug}/chat.db
+    """
+    if repo_source == "local":
+        return get_runtime_dir(local_repo_root=local_repo_root) / "chat.db"
+    normalized = normalize_github_repo_url(github_repo_url)
+    slug = slugify_repo_url(normalized)
+    return get_global_runtime_dir() / "chats" / "github" / slug / "chat.db"
+
+
+def get_chat_threads_path(
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    """chat_threads.json 경로 — repo 루트 레벨 (커밋 범위 무관)."""
+    return (
+        get_runtime_dir(
+            repo_source=repo_source,
+            local_repo_root=local_repo_root,
+        )
+        / "chat_threads.json"
+    )
+
+
+def load_chat_threads(
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> dict:
+    """
+    반환 형식:
+    {
+      "current": "20260401143000",
+      "threads": [
+        {"id": "...", "created_at": "...", "label": "대화 1"}
+      ]
+    }
+    """
+    path = get_chat_threads_path(
+        repo_source=repo_source,
+        github_repo_url=github_repo_url,
+        local_repo_root=local_repo_root,
+    )
+    if not path.exists():
+        return {"current": "", "threads": []}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {"current": "", "threads": []}
+    except Exception:
+        return {"current": "", "threads": []}
+
+
+def save_chat_threads(
+    threads_data: dict,
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> None:
+    path = get_chat_threads_path(
+        repo_source=repo_source,
+        github_repo_url=github_repo_url,
+        local_repo_root=local_repo_root,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(threads_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_chat_thread_log_path(
+    thread_id: str,
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    """thread log 경로 — repo 루트 레벨 chats/ 하위."""
+    return (
+        get_runtime_dir(
+            repo_source=repo_source,
+            local_repo_root=local_repo_root,
+        )
+        / "chats"
+        / f"{thread_id}.jsonl"
+    )
+
+
+def append_thread_event(
+    thread_id: str,
+    event: dict,
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> None:
+    path = get_chat_thread_log_path(
+        thread_id,
+        repo_source=repo_source,
+        github_repo_url=github_repo_url,
+        local_repo_root=local_repo_root,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def load_thread_log(
+    thread_id: str,
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> list[dict]:
+    path = get_chat_thread_log_path(
+        thread_id,
+        repo_source=repo_source,
+        github_repo_url=github_repo_url,
+        local_repo_root=local_repo_root,
+    )
+    if not path.exists():
+        return []
+    events: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                events.append(json.loads(line))
+            except Exception:
+                pass
+    return events
+
+
 def get_learning_session_path(
     session_id: str,
     *,
