@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -77,67 +78,86 @@ def stream_chat(
         yield {"type": "error", "content": str(exc)}
         return
 
-    try:
-        with SqliteSaver.from_conn_string(str(db_path)) as checkpointer:
-            app = graph_builder.compile(checkpointer=checkpointer)
-            config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    _MAX_RETRIES = 3
 
-            # 신규 thread인지 확인 → 커밋 컨텍스트 주입
-            existing = checkpointer.get(config)
-            if existing is None and commit_context:
-                input_messages = [
-                    SystemMessage(content=commit_context),
-                    HumanMessage(content=user_text),
-                ]
+    for attempt in range(_MAX_RETRIES + 1):
+        yielded_any = False
+        try:
+            with SqliteSaver.from_conn_string(str(db_path)) as checkpointer:
+                app = graph_builder.compile(checkpointer=checkpointer)
+                config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+
+                # 신규 thread인지 확인 → 커밋 컨텍스트 주입
+                existing = checkpointer.get(config)
+                if existing is None and commit_context:
+                    input_messages = [
+                        SystemMessage(content=commit_context),
+                        HumanMessage(content=user_text),
+                    ]
+                else:
+                    input_messages = [HumanMessage(content=user_text)]
+
+                full_content = ""
+                route_emitted = False
+
+                # stream_mode 리스트 사용 시 모든 이벤트가 (mode, data) 튜플로 옴
+                for mode, data in app.stream(
+                    {"messages": input_messages},
+                    config=config,
+                    stream_mode=["messages", "updates"],
+                ):
+                    if mode == "updates":
+                        # supervisor 노드 완료 → route 이벤트 yield
+                        if isinstance(data, dict) and "supervisor" in data:
+                            supervisor_output = data["supervisor"]
+                            route = supervisor_output.get("route", "general")
+                            if not route_emitted:
+                                event = {
+                                    "type": "route",
+                                    "route": route,
+                                    "label": ROUTE_LABELS.get(route, route),
+                                }
+                                yielded_any = True
+                                yield event
+                                route_emitted = True
+
+                    elif mode == "messages":
+                        # data = (chunk, metadata)
+                        chunk, metadata = data
+                        # supervisor 노드 출력은 route JSON이므로 스킵
+                        if metadata.get("langgraph_node") == "supervisor":
+                            continue
+                        if isinstance(chunk, AIMessageChunk):
+                            if chunk.content:
+                                full_content += str(chunk.content)
+                                yielded_any = True
+                                yield {"type": "token", "content": str(chunk.content)}
+                        elif isinstance(chunk, AIMessage):
+                            for tc in (chunk.tool_calls or []):
+                                yielded_any = True
+                                yield {
+                                    "type": "tool_call",
+                                    "name": tc.get("name", ""),
+                                    "args": tc.get("args", {}),
+                                }
+                        elif isinstance(chunk, ToolMessage):
+                            yield {"type": "tool_result", "content": str(chunk.content)}
+
+                yield {"type": "done", "full_content": full_content}
+                return
+
+        except Exception as exc:
+            exc_str = str(exc)
+            is_rate_limit = "429" in exc_str or "rate_limit_exceeded" in exc_str.lower()
+            if is_rate_limit and not yielded_any and attempt < _MAX_RETRIES:
+                wait = min(0.5 * (2 ** attempt), 5.0)  # 0.5s → 1s → 2s, 최대 5s
+                time.sleep(wait)
+                continue
+            if is_rate_limit:
+                yield {"type": "error", "content": "API 요청 한도 초과. 잠시 후 다시 시도해 주세요."}
             else:
-                input_messages = [HumanMessage(content=user_text)]
-
-            full_content = ""
-            route_emitted = False
-
-            # stream_mode 리스트 사용 시 모든 이벤트가 (mode, data) 튜플로 옴
-            for mode, data in app.stream(
-                {"messages": input_messages},
-                config=config,
-                stream_mode=["messages", "updates"],
-            ):
-                if mode == "updates":
-                    # supervisor 노드 완료 → route 이벤트 yield
-                    if isinstance(data, dict) and "supervisor" in data:
-                        supervisor_output = data["supervisor"]
-                        route = supervisor_output.get("route", "general")
-                        if not route_emitted:
-                            yield {
-                                "type": "route",
-                                "route": route,
-                                "label": ROUTE_LABELS.get(route, route),
-                            }
-                            route_emitted = True
-
-                elif mode == "messages":
-                    # data = (chunk, metadata)
-                    chunk, metadata = data
-                    # supervisor 노드 출력은 route JSON이므로 스킵
-                    if metadata.get("langgraph_node") == "supervisor":
-                        continue
-                    if isinstance(chunk, AIMessageChunk):
-                        if chunk.content:
-                            full_content += str(chunk.content)
-                            yield {"type": "token", "content": str(chunk.content)}
-                    elif isinstance(chunk, AIMessage):
-                        for tc in (chunk.tool_calls or []):
-                            yield {
-                                "type": "tool_call",
-                                "name": tc.get("name", ""),
-                                "args": tc.get("args", {}),
-                            }
-                    elif isinstance(chunk, ToolMessage):
-                        yield {"type": "tool_result", "content": str(chunk.content)}
-
-            yield {"type": "done", "full_content": full_content}
-
-    except Exception as exc:
-        yield {"type": "error", "content": str(exc)}
+                yield {"type": "error", "content": exc_str}
+            return
 
 
 def get_chat_history(
