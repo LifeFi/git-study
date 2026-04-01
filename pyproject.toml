@@ -14,11 +14,13 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.0",
     "python-dotenv>=1.1.1",
     "textual>=0.85.2",
+    "streamlit>=1.40.0",
 ]
 
 [project.scripts]
 git-study = "git_study.tui:run"
 git-study-v2 = "git_study.tui_v2:run_v2"
+git-study-streamlit = "git_study.streamlit_app:run_chat"
 
 [tool.uv]
 package = true
