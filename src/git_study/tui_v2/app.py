@@ -6,9 +6,12 @@ import time
 from pathlib import Path
 
 from textual import work
+from rich.text import Text as RichText
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
+from textual.widgets import Static
 
 from ..domain.code_context import get_commit_parent_sha
 from ..domain.inline_anchor import parse_file_context_blocks
@@ -34,6 +37,7 @@ from .commands import parse_command
 from .screens import CommitPickerScreen
 from .widgets.app_status_bar import AppStatusBar
 from .widgets.command_bar import CommandBar
+from .widgets.history_view import HistoryView
 from .widgets.inline_code_view import InlineCodeView
 
 
@@ -47,14 +51,72 @@ class GitStudyAppV2(App):
         layout: vertical;
     }
 
-    #main {
+    /* ── Chat mode (default) ── */
+    #scroll-wrapper {
+        width: 1fr;
+        height: auto;
+    }
+
+    #history-view {
+        width: 1fr;
+        height: auto;
+    }
+
+    #code-container {
+        display: none;
         width: 1fr;
         height: 1fr;
+    }
+
+
+    /* ── Code mode ── */
+    Screen.-code-active #scroll-wrapper {
+        height: 1fr;
+    }
+
+    Screen.-code-active #history-view {
+        display: none;
+    }
+
+    Screen.-code-active #code-container {
+        display: block;
+    }
+
+    /* ── Autocomplete panel: appears below cmd-bar, covers mode+pad area ── */
+    #cb-autocomplete {
+        height: 5;
+        display: none;
+        background: transparent;
+    }
+
+    #cb-ac-list {
+        height: auto;
+        padding: 0 0;
+    }
+
+    /* ── Fixed bottom section ── */
+    #app-status {
+        height: 2;
+    }
+
+    #cmd-bar {
+        height: 3;
+    }
+
+    #mode-bar {
+        height: 2;
+        padding: 1 1 0 1;
+        color: $text-muted;
+    }
+
+    #bottom-pad {
+        height: 3;
     }
     """
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        Binding("shift+tab", "toggle_view", "Chat/Code", priority=True),
     ]
 
     # ------------------------------------------------------------------
@@ -66,8 +128,9 @@ class GitStudyAppV2(App):
     _github_repo_url: str | None = None
     _local_repo_root: Path | None = None
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, repo_path: Path | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self._repo_path: Path | None = repo_path  # explicit path override
         self._questions: list[InlineQuizQuestion] = []
         self._answers: dict[str, str] = {}
         self._grades: list[InlineQuizGrade] = []
@@ -78,20 +141,43 @@ class GitStudyAppV2(App):
         self._newest_sha: str = ""
         # CommitSelection tracks which indices are selected in the picker
         self._commit_selection: CommitSelection = CommitSelection()
+        # Current history block (Vertical) for attaching results to last command
+        self._current_log_block = None
 
     # ------------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="main"):
-            yield InlineCodeView(id="code-view")
-        yield CommandBar(id="cmd-bar")
+        with VerticalScroll(id="scroll-wrapper"):
+            yield HistoryView(id="history-view")
+            with Horizontal(id="code-container"):
+                yield InlineCodeView(id="code-view")
         yield AppStatusBar(id="app-status")
+        yield CommandBar(id="cmd-bar")
+        with VerticalScroll(id="cb-autocomplete"):
+            yield Static("", id="cb-ac-list")
+        yield Static(self._mode_bar_text(), id="mode-bar")
+        yield Static("", id="bottom-pad")
 
     def on_mount(self) -> None:
+        # Prevent scroll containers from stealing focus
+        self.query_one("#scroll-wrapper").can_focus = False
+        self.query_one("#cb-autocomplete").can_focus = False
         self._load_local_repo()
         self.query_one("#cmd-bar", CommandBar).focus_input()
+
+    def on_focus(self, event) -> None:
+        """Redirect focus to command bar if it lands outside cmd-bar inputs."""
+        focused = self.focused
+        if focused is None:
+            return
+        if focused.id not in ("cb-input", "cb-answer", "code-scroll", "file-tree"):
+            try:
+                self.query_one("#cmd-bar", CommandBar).focus_input()
+            except Exception:
+                pass
+
 
     # ------------------------------------------------------------------
     # Initial load
@@ -99,15 +185,17 @@ class GitStudyAppV2(App):
 
     @work(thread=True)
     def _load_local_repo(self) -> None:
-        root = find_local_repo_root()
+        root = find_local_repo_root(start=self._repo_path)
         if root is None:
             self.call_from_thread(self._set_status, "Git 저장소를 찾을 수 없습니다.")
+            self.call_from_thread(self._log, "Git 저장소를 찾을 수 없습니다.", "error")
             return
         self._local_repo_root = root
         try:
             snapshot = get_commit_list_snapshot(
                 repo_source="local",
                 refresh_remote=False,
+                local_repo_root=root,
             )
         except Exception as exc:
             self.call_from_thread(self._set_status, f"커밋 로드 실패: {exc}")
@@ -130,6 +218,7 @@ class GitStudyAppV2(App):
         self._commits = commits
         if not commits:
             self._set_status("커밋이 없습니다.")
+            self._log("커밋이 없습니다.", "error")
             return
 
         # Phase 3: restore saved SHA range, fall back to HEAD
@@ -137,10 +226,13 @@ class GitStudyAppV2(App):
         saved_newest = saved_state.get("selected_range_end_sha", "")
 
         sha_index = {c.get("sha", ""): i for i, c in enumerate(commits)}
-        if saved_oldest and saved_newest and saved_oldest in sha_index and saved_newest in sha_index:
+        has_saved_range = (
+            saved_oldest and saved_newest
+            and saved_oldest in sha_index and saved_newest in sha_index
+        )
+        if has_saved_range:
             self._oldest_sha = saved_oldest
             self._newest_sha = saved_newest
-            # commits 리스트는 newest-first이므로 newest가 작은 인덱스
             newest_idx = sha_index[saved_newest]
             oldest_idx = sha_index[saved_oldest]
             if newest_idx == oldest_idx:
@@ -151,19 +243,20 @@ class GitStudyAppV2(App):
             self._oldest_sha = commits[0]["sha"]
             self._newest_sha = commits[0]["sha"]
 
+        # Load code view in background (ready for Shift+Tab toggle)
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.show_range(
             repo_source=self._repo_source,
             github_repo_url=self._github_repo_url,
             oldest_commit_sha=self._oldest_sha,
             newest_commit_sha=self._newest_sha,
+            local_repo_root=self._local_repo_root,
         )
 
         # Update AppStatusBar repo name and initial range
         try:
             status_bar = self.query_one("#app-status", AppStatusBar)
-            if self._local_repo_root is not None:
-                status_bar.set_repo(self._local_repo_root.name)
+            status_bar.set_repo(self._local_repo_root.name)
             if self._oldest_sha and self._newest_sha:
                 sha_index = {c.get("sha", ""): i for i, c in enumerate(commits)}
                 o_idx = sha_index.get(self._oldest_sha, 0)
@@ -172,6 +265,8 @@ class GitStudyAppV2(App):
                 status_bar.set_range(self._oldest_sha, self._newest_sha, count)
         except Exception:
             pass
+
+        self._log(f"저장소 로드 완료 ({len(commits)} commits)", "success")
 
         # Phase 4: restore quiz session if exists for this range
         session_restored = self._try_restore_session()
@@ -186,6 +281,7 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def on_command_bar_command_submitted(self, event: CommandBar.CommandSubmitted) -> None:
+        self._log_command(event.text)
         cmd = parse_command(event.text)
         match cmd.kind:
             case "quiz":
@@ -264,6 +360,16 @@ class GitStudyAppV2(App):
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.focus_input()
 
+    def on_command_bar_prev_question(self, event: CommandBar.PrevQuestion) -> None:
+        if self._questions:
+            self._current_q_index = (self._current_q_index - 1) % len(self._questions)
+            self._resume_answer_mode()
+
+    def on_command_bar_next_question(self, event: CommandBar.NextQuestion) -> None:
+        if self._questions:
+            self._current_q_index = (self._current_q_index + 1) % len(self._questions)
+            self._resume_answer_mode()
+
     def on_command_bar_answer_exited(self, event: CommandBar.AnswerExited) -> None:
         self._set_mode("idle")
         if self._questions:
@@ -287,8 +393,9 @@ class GitStudyAppV2(App):
             pass
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.activate_question(self._current_q_index)
-        self._update_answer_status()
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
+        self._update_answer_status()
+        cmd_bar.set_answer_mode(cmd_bar.status_text)
         cmd_bar.focus_input()
 
     # ------------------------------------------------------------------
@@ -305,6 +412,7 @@ class GitStudyAppV2(App):
             snapshot = get_commit_list_snapshot(
                 repo_source=self._repo_source,
                 refresh_remote=False,
+                local_repo_root=self._local_repo_root,
             )
             fresh_commits = snapshot.get("commits", [])
         except Exception as exc:
@@ -363,7 +471,9 @@ class GitStudyAppV2(App):
             github_repo_url=self._github_repo_url,
             oldest_commit_sha=oldest_sha,
             newest_commit_sha=newest_sha,
+            local_repo_root=self._local_repo_root,
         )
+        self._show_code_view()
 
         # Phase 2: persist the selected range
         self._save_app_state()
@@ -375,6 +485,8 @@ class GitStudyAppV2(App):
             self.query_one("#app-status", AppStatusBar).set_range(oldest_sha, newest_sha, count)
         except Exception:
             pass
+
+        self._log(f"커밋 범위 선택: {oldest_sha[:7]}..{newest_sha[:7]} ({count} commits)", "success")
 
         # 퀴즈 상태 초기화 후 새 범위의 세션 복원 시도
         self._reset_quiz_state()
@@ -417,7 +529,7 @@ class GitStudyAppV2(App):
 
         # Build commit context
         try:
-            repo = get_repo(repo_source=self._repo_source, github_repo_url=self._github_repo_url, refresh_remote=False)
+            repo = get_repo(repo_source=self._repo_source, github_repo_url=self._github_repo_url, refresh_remote=False, local_repo_root=self._local_repo_root)
             commit_shas = self._collect_shas_in_range(repo, oldest_sha, newest_sha)
             commits = [repo.commit(sha) for sha in commit_shas]
             if len(commits) == 1:
@@ -454,6 +566,7 @@ class GitStudyAppV2(App):
         if not questions:
             self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(self._set_status, "퀴즈 질문이 생성되지 않았습니다.")
+            self.call_from_thread(self._log, "퀴즈 질문이 생성되지 않았습니다.", "error")
             return
 
         # git에서 전체 파일 내용을 가져와 known_files 보강/덮어쓰기
@@ -483,6 +596,7 @@ class GitStudyAppV2(App):
         # Phase 4: save initial session
         self.call_from_thread(self._save_session)
 
+        self.call_from_thread(self._log, f"퀴즈 생성 완료! {len(questions)}문제", "success")
         self.call_from_thread(self._apply_quiz_to_view)
 
     def _apply_quiz_to_view(self) -> None:
@@ -513,7 +627,9 @@ class GitStudyAppV2(App):
             github_repo_url=self._github_repo_url,
             oldest_commit_sha=oldest_sha,
             newest_commit_sha=newest_sha,
+            local_repo_root=self._local_repo_root,
         )
+        self._show_code_view()
         # Update AppStatusBar range (count unknown here; use commits list for approximation)
         try:
             sha_index = {c.get("sha", ""): i for i, c in enumerate(self._commits)}
@@ -577,6 +693,7 @@ class GitStudyAppV2(App):
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.set_command_mode()
         cmd_bar.status_text = f"채점 완료! 평균 {avg:.1f}/10  ({len(grades)}문제)"
+        self._log(f"채점 완료! 평균 {avg:.1f}/10  ({len(grades)}문제)", "success")
 
     # ------------------------------------------------------------------
     # Help
@@ -601,6 +718,7 @@ class GitStudyAppV2(App):
             repo_source=self._repo_source,
             github_repo_url=self._github_repo_url,
             refresh_remote=False,
+            local_repo_root=self._local_repo_root,
         )
 
         if not range_arg:
@@ -781,6 +899,17 @@ class GitStudyAppV2(App):
         # Restore known_files from questions if needed (not persisted — will be empty)
         self._known_files = {}
 
+        # Show code view with the restored range
+        code_view = self.query_one("#code-view", InlineCodeView)
+        code_view.show_range(
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url,
+            oldest_commit_sha=self._oldest_sha,
+            newest_commit_sha=self._newest_sha,
+            local_repo_root=self._local_repo_root,
+        )
+        self._show_code_view()
+
         if self._grades:
             self._set_mode("idle")
             self._restore_graded_view()
@@ -859,6 +988,81 @@ class GitStudyAppV2(App):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _mode_bar_text(self, code_active: bool = False) -> RichText:
+        t = RichText()
+        if code_active:
+            t.append("▶▶ ", style="bold color(99)")
+            t.append("Code view on", style="bold color(99)")
+        else:
+            t.append("▶▶ ", style="bold green")
+            t.append("Chat mode on", style="bold green")
+        t.append("  (shift+tab to cycle)", style="dim")
+        return t
+
+    def _update_mode_bar(self) -> None:
+        code_active = self._is_code_view_active()
+        try:
+            self.query_one("#mode-bar", Static).update(
+                self._mode_bar_text(code_active)
+            )
+        except Exception:
+            pass
+
+    def _show_code_view(self) -> None:
+        """Switch to code view."""
+        try:
+            self.screen.add_class("-code-active")
+        except Exception:
+            pass
+        self._update_mode_bar()
+
+    def _show_chat_view(self) -> None:
+        """Switch to chat mode."""
+        try:
+            self.screen.remove_class("-code-active")
+        except Exception:
+            pass
+        self._update_mode_bar()
+
+    def _is_code_view_active(self) -> bool:
+        try:
+            return self.screen.has_class("-code-active")
+        except Exception:
+            return False
+
+    def _has_code_content(self) -> bool:
+        """Return True if commits have been selected and code view has content."""
+        return bool(self._oldest_sha and self._newest_sha)
+
+    def action_toggle_view(self) -> None:
+        """Shift+Tab: toggle between Chat mode and Code View."""
+        if self._is_code_view_active():
+            self._show_chat_view()
+        else:
+            if self._has_code_content():
+                self._show_code_view()
+            else:
+                self._set_status("선택된 커밋이 없습니다. /commits 로 커밋을 선택하세요.")
+
+    def _log_command(self, cmd: str) -> None:
+        """Append a command row to history and set as current block for results."""
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            self._current_log_block = hv.append_command(cmd)
+        except Exception:
+            pass
+
+    def _log(self, text: str, style: str = "info") -> None:
+        """Append a result row. If there's a current command block, attaches there; otherwise standalone."""
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            if self._current_log_block is not None:
+                hv.append_result(text, style, block=self._current_log_block)
+            else:
+                hv.append(text, style)
+        except Exception:
+            pass
+
     def _set_status(self, text: str) -> None:
         try:
             cmd_bar = self.query_one("#cmd-bar", CommandBar)
@@ -880,7 +1084,7 @@ class GitStudyAppV2(App):
         fpath = self._questions[q].get("file_path", "") if q < total else ""
         fname = fpath.split("/")[-1] if fpath else ""
         file_info = f"  ·  {fname}" if fname else ""
-        hint = f"Q{q + 1}/{total}{file_info}  |  [Shift+Enter] 제출  [Esc] 종료  [/answer] 재진입"
+        hint = f"Q{q + 1}/{total}{file_info}  [dim]\\[Shift+Enter] 제출  \\[Shift+↑↓] 이동  \\[Esc] 종료[/dim]"
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         # mode는 이미 "answer"이므로 set_answer_mode 대신 status_text 직접 설정
         # (reactive가 동일 mode값 재할당 시 후속 업데이트를 무시할 수 있음)
@@ -889,4 +1093,14 @@ class GitStudyAppV2(App):
 
 def run_v2() -> None:
     """Entry point for git-study-v2."""
-    GitStudyAppV2().run()
+    import argparse
+    parser = argparse.ArgumentParser(prog="git-study-v2")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Git 저장소 경로 (기본값: 현재 디렉토리)",
+    )
+    args = parser.parse_args()
+    repo_path = Path(args.path).expanduser().resolve() if args.path else None
+    GitStudyAppV2(repo_path=repo_path).run()

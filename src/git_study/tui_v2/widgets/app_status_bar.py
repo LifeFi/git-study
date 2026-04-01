@@ -12,12 +12,10 @@ class AppStatusBar(Widget):
 
     DEFAULT_CSS = """
     AppStatusBar {
-        height: 3;
-        dock: bottom;
+        height: 2;
         background: transparent;
-        color: $text-muted;
+        color: $text;
         layout: vertical;
-        padding-bottom: 1;
     }
 
     AppStatusBar .asb-sep {
@@ -42,7 +40,7 @@ class AppStatusBar(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
-        yield Static("◆ git-study", id="asb-line")
+        yield Static("", id="asb-line")
 
     def set_repo(self, repo_name: str) -> None:
         self._repo_name = repo_name
@@ -68,9 +66,8 @@ class AppStatusBar(Widget):
             t = Text(no_wrap=True)
             sep = Text(" | ", style="dim")
 
-            t.append("◆ git-study", style="dim")
             if self._repo_name:
-                t.append(f" · {self._repo_name}", style="dim")
+                t.append(self._repo_name, style="")
 
             if self._oldest_sha:
                 t.append_text(sep)

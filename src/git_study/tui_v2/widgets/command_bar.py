@@ -2,6 +2,7 @@
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.message import Message
@@ -34,23 +35,10 @@ class CommandBar(Widget):
 
     DEFAULT_CSS = """
     CommandBar {
-        height: 3;
-        dock: bottom;
-        margin-bottom: 3;
+        height: auto;
+        max-height: 14;
         background: transparent;
         layout: vertical;
-    }
-
-    CommandBar #cb-autocomplete {
-        height: auto;
-        display: none;
-        background: $panel;
-        layout: vertical;
-    }
-
-    CommandBar #cb-ac-list {
-        height: auto;
-        padding: 0 1;
     }
 
     CommandBar #cb-status {
@@ -109,7 +97,25 @@ class CommandBar(Widget):
         padding: 0 0 0 1;
         background: transparent;
     }
+
+    CommandBar #cb-autocomplete {
+        height: auto;
+        max-height: 5;
+        display: none;
+        background: transparent;
+    }
+
+    CommandBar #cb-ac-list {
+        height: auto;
+        padding: 0 0;
+    }
     """
+
+    BINDINGS = [
+        Binding("tab", "tab_pressed", priority=True),
+        Binding("shift+up", "prev_question", priority=True),
+        Binding("shift+down", "next_question", priority=True),
+    ]
 
     # ------------------------------------------------------------------
     # Messages
@@ -126,6 +132,12 @@ class CommandBar(Widget):
             self.answer = answer
 
     class AnswerExited(Message):
+        pass
+
+    class PrevQuestion(Message):
+        pass
+
+    class NextQuestion(Message):
         pass
 
     # ------------------------------------------------------------------
@@ -161,14 +173,12 @@ class CommandBar(Widget):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="cb-autocomplete"):
-            yield Static("", id="cb-ac-list")
         yield Static(self.status_text, id="cb-status")
         with Horizontal(id="cb-input-row"):
             yield Static(">", id="cb-prompt")
             yield Input(placeholder="/quiz HEAD~3", id="cb-input")
         with Horizontal(id="cb-answer-row"):
-            yield Static(">", id="cb-answer-prompt")
+            yield Static("A", id="cb-answer-prompt")
             yield TextArea(id="cb-answer")
 
     # ------------------------------------------------------------------
@@ -190,12 +200,10 @@ class CommandBar(Widget):
                 status.add_class("-answer-mode")
                 input_row.display = False
                 answer_row.display = True
-                self.styles.height = "auto"
             else:
                 status.remove_class("-answer-mode")
                 input_row.display = True
                 answer_row.display = False
-                self.styles.height = 3
         except Exception:
             pass
 
@@ -228,6 +236,22 @@ class CommandBar(Widget):
         else:
             self.query_one("#cb-input", Input).focus()
 
+    def action_prev_question(self) -> None:
+        self.post_message(self.PrevQuestion())
+
+    def action_next_question(self) -> None:
+        self.post_message(self.NextQuestion())
+
+    def action_tab_pressed(self) -> None:
+        if self.mode == "command" and self._ac_candidates and 0 <= self._ac_index < len(self._ac_candidates):
+            cmd, _ = self._ac_candidates[self._ac_index]
+            self._close_autocomplete()
+            inp = self.query_one("#cb-input", Input)
+            inp.value = cmd
+            inp.cursor_position = len(cmd)
+        else:
+            self.app.action_focus_next()
+
     # ------------------------------------------------------------------
     # Autocomplete helpers
     # ------------------------------------------------------------------
@@ -236,16 +260,20 @@ class CommandBar(Widget):
         self._ac_candidates = candidates
         self._ac_index = index
         self._render_autocomplete()
-        self.query_one("#cb-autocomplete", Vertical).display = True
-        self.styles.height = "auto"
+        try:
+            self.app.query_one("#cb-autocomplete").display = True
+            self.app.query_one("#mode-bar").display = False
+            self.app.query_one("#bottom-pad").display = False
+        except Exception:
+            pass
 
     def _close_autocomplete(self) -> None:
         self._ac_candidates = []
         self._ac_index = -1
         try:
-            self.query_one("#cb-autocomplete", Vertical).display = False
-            if self.mode == "command":
-                self.styles.height = 3
+            self.app.query_one("#cb-autocomplete").display = False
+            self.app.query_one("#mode-bar").display = True
+            self.app.query_one("#bottom-pad").display = True
         except Exception:
             pass
 
@@ -254,14 +282,14 @@ class CommandBar(Widget):
             t = Text()
             for i, (cmd, desc) in enumerate(self._ac_candidates):
                 if i == self._ac_index:
-                    t.append(f" ▶ {cmd:<20}", style="bold reverse")
-                    t.append(f" {desc}", style="bold reverse")
+                    t.append(f"   {cmd:<20}", style="bold color(99)")
+                    t.append(f" {desc}", style="bold color(99)")
                 else:
                     t.append(f"   {cmd:<20}", style="dim")
                     t.append(f" {desc}", style="dim")
                 if i < len(self._ac_candidates) - 1:
                     t.append("\n")
-            self.query_one("#cb-ac-list", Static).update(t)
+            self.app.query_one("#cb-ac-list", Static).update(t)
         except Exception:
             pass
 
@@ -270,7 +298,7 @@ class CommandBar(Widget):
             cmd, _ = self._ac_candidates[self._ac_index]
             self._close_autocomplete()
             text = cmd.strip()
-            if not self._history or self._history[-1] != text:
+            if not text.startswith("/") and (not self._history or self._history[-1] != text):
                 self._history.append(text)
             self._history_index = -1
             self._history_draft = ""
@@ -298,7 +326,7 @@ class CommandBar(Widget):
                 return
             text = event.value.strip()
             if text:
-                if not self._history or self._history[-1] != text:
+                if not text.startswith("/") and (not self._history or self._history[-1] != text):
                     self._history.append(text)
                 self._history_index = -1
                 self._history_draft = ""
@@ -329,26 +357,8 @@ class CommandBar(Widget):
                     self._close_autocomplete()
                     event.stop()
                     event.prevent_default()
-            elif event.key == "tab":
-                if self._ac_candidates and 0 <= self._ac_index < len(self._ac_candidates):
-                    cmd, _ = self._ac_candidates[self._ac_index]
-                    self._close_autocomplete()
-                    inp = self.query_one("#cb-input", Input)
-                    inp.value = cmd
-                    inp.cursor_position = len(cmd)
-                    event.stop()
-                    event.prevent_default()
-                else:
-                    # autocomplete 없으면 Tab으로 포커스 이동
-                    self.app.action_focus_next()
-                    event.stop()
-                    event.prevent_default()
         elif self.mode == "answer":
-            if event.key == "tab":
-                self.app.action_focus_next()
-                event.stop()
-                event.prevent_default()
-            elif event.key == "shift+enter":
+            if event.key == "shift+enter":
                 answer = self.get_current_answer().strip()
                 if answer:
                     self.clear_input()

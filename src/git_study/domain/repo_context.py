@@ -28,8 +28,11 @@ def get_repo(
     repo_source: Literal["local", "github"] = "local",
     github_repo_url: str | None = None,
     refresh_remote: bool = True,
+    local_repo_root=None,
 ) -> Repo:
     if repo_source == "local":
+        if local_repo_root is not None:
+            return Repo(str(local_repo_root))
         return Repo(".", search_parent_directories=True)
 
     if not github_repo_url:
@@ -117,8 +120,9 @@ def get_commit_list_snapshot(
     repo_source: Literal["local", "github"] = "local",
     github_repo_url: str | None = None,
     refresh_remote: bool = True,
+    local_repo_root=None,
 ) -> CommitListSnapshot:
-    repo = get_repo(repo_source, github_repo_url, refresh_remote=refresh_remote)
+    repo = get_repo(repo_source, github_repo_url, refresh_remote=refresh_remote, local_repo_root=local_repo_root)
     commits: list[dict[str, str]] = []
     total_commit_count = 0
 

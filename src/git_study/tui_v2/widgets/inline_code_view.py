@@ -26,7 +26,7 @@ from ...domain.code_context import (
 )
 from ...domain.repo_context import get_repo
 from ...tui.code_browser import highlight_code_lines  # syntax highlighting per line
-from ...tui.inline_quiz import find_anchor_line, QUESTION_TYPE_KO
+from ...tui.inline_quiz import find_anchor_line, resolve_anchor_line, QUESTION_TYPE_KO
 from ...types import InlineQuizGrade, InlineQuizQuestion
 
 _CONTEXT_LINES = 3  # lines of context around each hunk (like git diff -U3)
@@ -628,6 +628,14 @@ class InlineCodeView(Widget):
         padding: 0 1;
     }
 
+    InlineCodeView #file-tree-pane:focus-within {
+        border: round $accent;
+    }
+
+    InlineCodeView #code-view-pane:focus-within {
+        border: round $accent;
+    }
+
     InlineCodeView #cv-file-label {
         height: auto;
         color: $accent;
@@ -718,16 +726,19 @@ class InlineCodeView(Widget):
         github_repo_url: str | None,
         oldest_commit_sha: str,
         newest_commit_sha: str,
+        local_repo_root=None,
     ) -> None:
         """Load a commit range and populate the file tree."""
         self.repo_source = repo_source
         self.github_repo_url = github_repo_url
         self.oldest_commit_sha = oldest_commit_sha
         self.newest_commit_sha = newest_commit_sha
+        self.local_repo_root = local_repo_root
         self.repo = get_repo(
             repo_source=self.repo_source,
             github_repo_url=self.github_repo_url,
             refresh_remote=False,
+            local_repo_root=local_repo_root,
         )
         self.base_commit_sha = get_commit_parent_sha(self.repo, self.oldest_commit_sha)
         base_commit = self.repo.commit(self.base_commit_sha) if self.base_commit_sha else None
@@ -764,9 +775,8 @@ class InlineCodeView(Widget):
         for q in self._questions:
             qid = q.get("id", "")
             fpath = q.get("file_path", "")
-            snippet = q.get("anchor_snippet", "")
             content = self._get_file_content(fpath)
-            self._anchor_cache[qid] = find_anchor_line(content, snippet) if content and snippet else None
+            self._anchor_cache[qid] = resolve_anchor_line(q, content or "")
         self._update_tree_quiz_markers()
         # Show the file for the current question
         if self._questions:
