@@ -5,6 +5,8 @@ from __future__ import annotations
 from __future__ import annotations
 
 from importlib.metadata import version, PackageNotFoundError
+from rich.console import Group as RichGroup
+from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -18,8 +20,9 @@ def _get_version() -> str:
     except PackageNotFoundError:
         return "?"
 
-_CHEVRON = ">"
-_RESULT_PREFIX = "  └ "
+
+_CHEVRON = "❯"  # ❯
+_RESULT_PREFIX = "⎿  "  # └ ⎿
 _cmd_block_counter: int = 0
 _SPINNER_FRAMES = ["|", "/", "—", "\\"]
 
@@ -38,23 +41,41 @@ class LoadingRow(Widget):
         super().__init__(classes="hv-loading-row")
         self._text = text
         self._frame_idx = 0
+        self._ticks = 0  # 0.1초 단위 카운터
 
     def on_mount(self) -> None:
         self.set_interval(0.1, self._tick)
 
     def _tick(self) -> None:
         self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        self._ticks += 1
         self.refresh()
 
     def set_text(self, text: str) -> None:
         self._text = text
         self.refresh()
 
+    @property
+    def elapsed_seconds(self) -> int:
+        return self._ticks // 10
+
+    def _elapsed_str(self) -> str | None:
+        seconds = self.elapsed_seconds
+        if seconds < 10:
+            return None
+        m, s = divmod(seconds, 60)
+        if m > 0:
+            return f"({m}m {s:02d}s)"
+        return f"({s}s)"
+
     def render(self) -> Text:
         frame = _SPINNER_FRAMES[self._frame_idx]
         t = Text()
         t.append(f"{frame} ", style="bold yellow")
         t.append(self._text, style="dim")
+        elapsed = self._elapsed_str()
+        if elapsed:
+            t.append(f"  {elapsed}", style="dim")
         return t
 
 
@@ -94,7 +115,7 @@ class HistoryView(Widget):
     HistoryView .hv-cmd-row {
         height: 1;
         padding: 0 1;
-        background: $panel;
+        background: $boost;
         color: $text;
     }
 
@@ -129,15 +150,15 @@ class HistoryView(Widget):
 
     HistoryView .hv-user-msg {
         height: auto;
-        padding: 0 2;
-        background: $panel;
+        padding: 0 1;
+        background: $boost;
         color: $text;
+        margin-bottom: 1;
     }
 
     HistoryView .hv-assistant-streaming {
         height: auto;
         padding: 0 2;
-        color: $text-muted;
     }
 
     HistoryView .hv-tool-call {
@@ -158,22 +179,25 @@ class HistoryView(Widget):
         t.append(f" v{v}\n", style="dim")
         t.append("AI writes. But do you?\n", style="dim italic")
         t.append("\n")
-        t.append(" /commits", style="bold cyan")
-        t.append("  커밋 범위 선택\n", style="dim")
-        t.append(" /quiz", style="bold cyan")
-        t.append("     퀴즈 생성\n", style="dim")
-        t.append(" /review", style="bold cyan")
-        t.append("   커밋 해설 보기\n", style="dim")
-        t.append(" /grade", style="bold cyan")
-        t.append("    채점\n", style="dim")
-        t.append(" /clear", style="bold cyan")
-        t.append("    대화 초기화\n", style="dim")
-        t.append(" /resume", style="bold cyan")
-        t.append("   이전 대화 불러오기\n", style="dim")
-        t.append(" /help", style="bold cyan")
-        t.append("     도움말\n", style="dim")
-        t.append(" Ctrl+Q", style="bold cyan")
-        t.append("    종료\n", style="dim")
+        t.append("  Step 1  ", style="dim")
+        t.append("/commits", style="bold cyan")
+        t.append("    pick a commit range\n", style="dim")
+        t.append("  Step 2  ", style="dim")
+        t.append("/quiz", style="bold cyan")
+        t.append("       generate questions from the diff\n", style="dim")
+        t.append("  Step 3  ", style="dim")
+        t.append("/answer", style="bold cyan")
+        t.append("     click a quiz block · or type /answer\n", style="dim")
+        t.append("  Step 4  ", style="dim")
+        t.append("/grade", style="bold cyan")
+        t.append("      get feedback\n", style="dim")
+        t.append("\n")
+        t.append("  /help", style="cyan")
+        t.append(" for all commands   ", style="dim")
+        t.append("Shift+Tab", style="cyan")
+        t.append(" toggle panels   ", style="dim")
+        t.append("Ctrl+Q", style="cyan")
+        t.append(" to quit\n", style="dim")
         return t
 
     def append_command(self, cmd: str) -> Vertical:
@@ -191,7 +215,9 @@ class HistoryView(Widget):
         block.mount(cmd_row)
         return block
 
-    def append_result(self, text: str, style: str = "info", block: Vertical | None = None) -> None:
+    def append_result(
+        self, text: str, style: str = "info", block: Vertical | None = None
+    ) -> None:
         """Append a result row (└ text) under the last command block or given block."""
         if block is None:
             # Find last hv-cmd-block
@@ -213,13 +239,6 @@ class HistoryView(Widget):
         entry = Static(result_text, classes=f"hv-result-row -{style}")
         container.mount(entry)
 
-    def _scroll_to_end(self) -> None:
-        """실제 스크롤 컨테이너(#scroll-wrapper)를 맨 아래로 스크롤."""
-        try:
-            self.app.query_one("#scroll-wrapper").scroll_end(animate=False)
-        except Exception:
-            pass
-
     def append_markdown(self, md_text: str, block: Vertical | None = None) -> None:
         """마크다운 텍스트를 렌더링해 HistoryView 블록에 추가."""
         target = block or self.query_one("#hv-content", Vertical)
@@ -229,8 +248,6 @@ class HistoryView(Widget):
             # 특정 block에 추가할 때는 해당 block이 보이도록 스크롤
             # (끝으로 스크롤하면 중간에 삽입된 결과가 뷰포트 밖으로 나감)
             self.call_after_refresh(block.scroll_visible, animate=False)
-        else:
-            self._scroll_to_end()
 
     def append_separator(self, text: str = "─" * 40) -> None:
         """구분선 추가 (세션 복원 시 이전/현재 세션 구분용)."""
@@ -248,7 +265,6 @@ class HistoryView(Widget):
         user_row = Static(user_text, classes="hv-user-msg")
         container.mount(block)
         block.mount(user_row)
-        self._scroll_to_end()
         return block
 
     def begin_streaming(self, block: Vertical) -> Static:
@@ -256,21 +272,24 @@ class HistoryView(Widget):
         block.mount(Static("", classes="hv-assistant-streaming"))
         streaming_widget = Static("▌", classes="hv-assistant-streaming")
         block.mount(streaming_widget)
-        self._scroll_to_end()
         return streaming_widget
 
     def update_streaming(self, widget: Static, text: str) -> None:
-        """스트리밍 중 누적 텍스트 업데이트."""
-        widget.update(text + "▌")
-        self._scroll_to_end()
+        """스트리밍 중 누적 텍스트를 plain text로 업데이트 (마크다운 파싱 생략).
+
+        매 청크마다 RichMarkdown을 파싱하면 위젯 높이가 두 번 계산되어
+        레이아웃이 덜컥거린다. 완료 시 end_streaming에서 마크다운으로 전환.
+        """
+        widget.update(Text(text + " ▌"))
 
     def end_streaming(self, block: Vertical, widget: Static, full_text: str) -> None:
-        """스트리밍 완료 — Static을 Markdown으로 교체."""
-        widget.remove()
+        """스트리밍 완료 — 최종 마크다운 렌더링 (widget 교체 없이)."""
         if full_text.strip():
-            md = Markdown(full_text, classes="hv-markdown")
-            block.mount(md)
-        self._scroll_to_end()
+            widget.remove_class("hv-assistant-streaming")
+            widget.add_class("hv-markdown")
+            widget.update(RichMarkdown(full_text))
+        else:
+            widget.remove()
 
     def append_tool_call(self, name: str, block: Vertical | None = None) -> None:
         """tool 호출 표시 (한 줄 요약)."""
@@ -283,7 +302,6 @@ class HistoryView(Widget):
         target = block or self.query_one("#hv-content", Vertical)
         row = LoadingRow(text)
         target.mount(row)
-        self._scroll_to_end()
         return row
 
     def end_progress(self, row: LoadingRow) -> None:

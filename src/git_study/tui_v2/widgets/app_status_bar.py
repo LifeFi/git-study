@@ -29,6 +29,8 @@ class AppStatusBar(Widget):
     AppStatusBar #asb-row {
         height: 1;
         padding: 0 1;
+        margin: 1 0;
+        background: $panel;
     }
 
     AppStatusBar #asb-line {
@@ -54,10 +56,13 @@ class AppStatusBar(Widget):
     _hook_installed: bool | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
+        # yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
         with Horizontal(id="asb-row"):
             yield Static("", id="asb-line")
             yield Static("", id="asb-notify")
+
+    def on_mount(self) -> None:
+        self._refresh()
 
     def set_repo(self, repo_name: str) -> None:
         self._repo_name = repo_name
@@ -112,9 +117,9 @@ class AppStatusBar(Widget):
             if self._hook_installed is not None:
                 t.append_text(sep)
                 if self._hook_installed:
-                    t.append("hook ⚓", style="dim green")
+                    t.append("hook:ON", style="bold bright_yellow")
                 else:
-                    t.append("hook -", style="dim")
+                    t.append("hook:OFF", style="dim")
 
             t.append_text(sep)
             mode_labels = {
