@@ -346,10 +346,16 @@ class GitStudyAppV2(App):
 
         # Phase 4: restore quiz session if exists for this range
         session_restored = self._try_restore_session()
+        self._update_hook_status()
         if not session_restored:
+            hook_installed = (
+                self._local_repo_root is not None
+                and (self._local_repo_root / ".git" / "hooks" / "post-commit").exists()
+                and _has_hook((self._local_repo_root / ".git" / "hooks" / "post-commit").read_text())
+            )
+            hook_hint = "  ⚓ hook 등록됨." if hook_installed else "  /install-hook 으로 커밋 후 자동 퀴즈 설정."
             self._set_status(
-                f"저장소 로드 완료 ({len(commits)} commits). "
-                "/quiz 로 퀴즈 생성, /commits 로 커밋 선택."
+                f"저장소 로드 완료 ({len(commits)} commits).{hook_hint}"
             )
 
         # Phase 5: auto-quiz if --auto-quiz flag was passed
@@ -1046,6 +1052,10 @@ class GitStudyAppV2(App):
     def _handle_install_hook(self, terminal: str = "") -> None:
         import stat
 
+        if self._repo_source == "github":
+            self._set_status("GitHub 저장소에는 post-commit hook을 설치할 수 없습니다.")
+            return
+
         repo_root = self._local_repo_root
         if not repo_root:
             self._set_status("[red]저장소가 로드되지 않았습니다.[/red]")
@@ -1063,6 +1073,7 @@ class GitStudyAppV2(App):
                 hook_path.write_text(base.rstrip("\n") + "\n" + block)
                 hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                 self._set_status(f"✓ hook 업데이트 완료: {hook_path}")
+                self._update_hook_status()
                 return
             with hook_path.open("a") as f:
                 f.write(f"\n{block}")
@@ -1072,8 +1083,13 @@ class GitStudyAppV2(App):
 
         hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self._set_status(f"✓ hook 설치 완료: {hook_path}")
+        self._update_hook_status()
 
     def _handle_uninstall_hook(self) -> None:
+        if self._repo_source == "github":
+            self._set_status("GitHub 저장소에는 post-commit hook이 없습니다.")
+            return
+
         repo_root = self._local_repo_root
         if not repo_root:
             self._set_status("[red]저장소가 로드되지 않았습니다.[/red]")
@@ -1096,6 +1112,7 @@ class GitStudyAppV2(App):
         else:
             hook_path.write_text(new_content + "\n")
             self._set_status(f"✓ hook 제거 완료 (기존 내용 보존): {hook_path}")
+        self._update_hook_status()
 
     # ------------------------------------------------------------------
     # Repo switching
@@ -2187,6 +2204,20 @@ class GitStudyAppV2(App):
         try:
             cmd_bar = self.query_one("#cmd-bar", CommandBar)
             cmd_bar.status_text = text
+        except Exception:
+            pass
+
+    def _update_hook_status(self) -> None:
+        """AppStatusBar의 hook 설치 여부 표시 갱신."""
+        try:
+            if self._repo_source == "github":
+                installed: bool | None = False  # GitHub 모드: hook 설치 불가
+            elif self._local_repo_root:
+                hook_path = self._local_repo_root / ".git" / "hooks" / "post-commit"
+                installed = hook_path.exists() and _has_hook(hook_path.read_text())
+            else:
+                installed = None
+            self.query_one("#app-status", AppStatusBar).set_hook(installed)
         except Exception:
             pass
 

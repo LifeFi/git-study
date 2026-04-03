@@ -51,6 +51,7 @@ class AppStatusBar(Widget):
     _mode: str = "idle"
     _quiz_progress: tuple[int, int] = (0, 0)
     _notification: str = ""
+    _hook_installed: bool | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
@@ -74,6 +75,10 @@ class AppStatusBar(Widget):
 
     def set_quiz_progress(self, current: int, total: int) -> None:
         self._quiz_progress = (current, total)
+        self._refresh()
+
+    def set_hook(self, installed: bool | None) -> None:
+        self._hook_installed = installed
         self._refresh()
 
     def set_notification(self, text: str) -> None:
@@ -103,6 +108,13 @@ class AppStatusBar(Widget):
                     t.append("..", style="dim")
                     t.append(self._newest_sha[:7], style="bold color(214)")
                     t.append(f" ({self._commit_count})", style="dim")
+
+            if self._hook_installed is not None:
+                t.append_text(sep)
+                if self._hook_installed:
+                    t.append("hook ⚓", style="dim green")
+                else:
+                    t.append("hook -", style="dim")
 
             t.append_text(sep)
             mode_labels = {
