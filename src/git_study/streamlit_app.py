@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from git_study.settings import SUGGESTED_MODELS
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 페이지 설정
 # ──────────────────────────────────────────────────────────────────────────────
@@ -224,6 +226,22 @@ with st.sidebar:
             else:
                 st.caption(f"{n_commits}개 커밋 범위 선택됨")
 
+    # ── 모델 설정 ──────────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("모델")
+    from git_study.settings import load_settings, save_settings, DEFAULT_MODEL, SUGGESTED_MODELS as _SM
+    _settings = load_settings()
+    _current = _settings.get("model", DEFAULT_MODEL)
+    _idx = _SM.index(_current) if _current in _SM else (_SM.index(DEFAULT_MODEL) if DEFAULT_MODEL in _SM else 0)
+    _selected = st.selectbox("모델 선택", _SM, index=_idx, label_visibility="collapsed")
+    if _selected != _current:
+        save_settings(
+            model=_selected,
+            openai_api_key_mode=_settings.get("openai_api_key_mode", "session"),
+            openai_api_key_configured=_settings.get("openai_api_key_configured", False),
+        )
+        st.rerun()
+
     # ── 대화 관리 ──────────────────────────────────────────────────────────────
     if st.session_state.newest_sha:
         st.divider()
@@ -297,6 +315,36 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("질문을 입력하세요…")
 
 if user_input:
+    # ── /model 커맨드 처리 ────────────────────────────────────────────────────
+    if user_input.strip().lower().startswith("/model"):
+        parts = user_input.strip().split(maxsplit=1)
+        from git_study.settings import load_settings, save_settings, DEFAULT_MODEL
+
+        if len(parts) == 1:
+            # /model → 현재 모델과 제안 목록 표시
+            current = load_settings().get("model", DEFAULT_MODEL)
+            suggestions = "\n".join(f"- `{m}`" for m in SUGGESTED_MODELS)
+            with st.chat_message("assistant"):
+                st.markdown(
+                    f"현재 모델: **`{current}`**\n\n"
+                    f"사용 가능한 모델 예시:\n{suggestions}\n\n"
+                    f"`/model gpt-4o` 형식으로 변경하세요."
+                )
+        else:
+            new_model = parts[1].strip()
+            settings = load_settings()
+            save_settings(
+                model=new_model,
+                openai_api_key_mode=settings.get("openai_api_key_mode", "session"),
+                openai_api_key_configured=settings.get("openai_api_key_configured", False),
+            )
+            with st.chat_message("user"):
+                st.markdown(user_input)
+            with st.chat_message("assistant"):
+                st.markdown(f"모델이 **`{new_model}`** 으로 변경되었습니다.")
+            st.rerun()
+        st.stop()
+
     st.session_state.messages.append({"role": "human", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
