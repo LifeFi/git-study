@@ -9,6 +9,7 @@ from ..llm.schemas import normalize_inline_grade_review, normalize_inline_grades
 from ..prompts.inline_grade import build_inline_grade_prompt
 from ..prompts.inline_grade_review import build_inline_grade_review_prompt
 from ..types import InlineQuizGrade, InlineQuizQuestion
+from .grade_utils import build_final_grades
 
 
 class InlineGradeGraphState(TypedDict, total=False):
@@ -117,62 +118,15 @@ def finalize_grades(state: InlineGradeGraphState) -> InlineGradeGraphState:
         if isinstance(normalized_grades, list) and normalized_grades
         else state.get("raw_grades", [])
     )
-    final_grades: list[InlineQuizGrade] = []
-    expected_ids = [question["id"] for question in state.get("questions", [])]
-    seen_ids: set[str] = set()
+    questions = state.get("questions", [])
+    expected_ids = [question["id"] for question in questions]
     source_items = list(source) if isinstance(source, list) else []
 
-    for item in source_items:
-        grade_id = str(item.get("id", "")).strip()
-        if not grade_id or grade_id in seen_ids or grade_id not in expected_ids:
-            continue
-        seen_ids.add(grade_id)
-        try:
-            score = int(item.get("score", 0))
-        except Exception:
-            score = 0
-        score = max(0, min(100, score))
-        feedback = str(item.get("feedback", "")).strip() or "피드백이 충분히 생성되지 않았습니다."
-        final_grades.append(
-            InlineQuizGrade(
-                id=grade_id,
-                score=score,
-                feedback=feedback,
-            )
-        )
-
-    if not final_grades and source_items:
-        for question, item in zip(state.get("questions", []), source_items):
-            try:
-                score = int(item.get("score", 0))
-            except Exception:
-                score = 0
-            feedback = (
-                str(item.get("feedback", "")).strip()
-                or "피드백이 충분히 생성되지 않았습니다."
-            )
-            final_grades.append(
-                InlineQuizGrade(
-                    id=question["id"],
-                    score=max(0, min(100, score)),
-                    feedback=feedback,
-                )
-            )
-
-    grade_map = {grade["id"]: grade for grade in final_grades}
-    completed: list[InlineQuizGrade] = []
-    for question in state.get("questions", []):
-        grade = grade_map.get(question["id"])
-        if grade is not None:
-            completed.append(grade)
-            continue
-        completed.append(
-            InlineQuizGrade(
-                id=question["id"],
-                score=0,
-                feedback="채점 결과가 누락되어 기본값으로 처리했습니다.",
-            )
-        )
+    raw_grades = build_final_grades(source_items, expected_ids, questions)
+    completed: list[InlineQuizGrade] = [
+        InlineQuizGrade(id=g["id"], score=g["score"], feedback=g["feedback"])
+        for g in raw_grades
+    ]
     return {
         "final_grades": completed,
         "grading_summary": dict(review.get("grading_summary", {})),

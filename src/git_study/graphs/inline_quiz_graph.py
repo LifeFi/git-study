@@ -10,12 +10,10 @@ from ..domain.inline_anchor import (
 )
 from ..llm.client import LLMClient
 from ..llm.schemas import (
-    normalize_inline_anchor_candidates,
     normalize_inline_questions,
     normalize_quiz_review,
 )
-from ..prompts.inline_anchor import build_inline_anchor_prompt
-from ..prompts.inline_question import build_inline_question_prompt
+from ..prompts.inline_question import build_inline_combined_prompt, build_inline_question_prompt
 from ..prompts.inline_question_review import build_inline_question_review_prompt
 from ..tools.code_context import build_get_neighbor_code_context_tool
 from ..types import InlineQuizQuestion
@@ -27,25 +25,12 @@ class InlineQuizGraphState(TypedDict, total=False):
     user_request: str
     actual_paths: list[str]
     file_context_map: dict[str, str]
+    full_file_map: dict[str, str]  # 잘리지 않은 원본 파일 내용 (get_neighbor_code_context용)
     anchor_candidates: list[dict[str, str]]
     validated_anchors: list[dict[str, str]]
     inline_questions: list[InlineQuizQuestion]
     inline_review: dict
     repair_attempts: int
-
-
-class InlineAnchorCandidateStructuredOutput(BaseModel):
-    file_path: str = Field(default="")
-    anchor_line: int = Field(default=0)
-    anchor_snippet: str = Field(default="")
-    question_type: str = Field(default="intent")
-    reason: str = Field(default="")
-
-
-class InlineAnchorCandidateListStructuredOutput(
-    RootModel[list[InlineAnchorCandidateStructuredOutput]]
-):
-    root: list[InlineAnchorCandidateStructuredOutput] = Field(default_factory=list)
 
 
 class InlineQuestionStructuredOutput(BaseModel):
@@ -72,9 +57,8 @@ TOOL_USAGE_SUFFIX = """
 
 Tooling:
 - You have access to `get_neighbor_code_context`.
-- Before returning the final JSON, call `get_neighbor_code_context` at least once for one of the validated anchors.
-- Pass the anchor_line from a validated anchor to inspect surrounding code.
-- Use the returned neighboring code only to improve reasoning quality. Final `file_path` and `anchor_line` must still match the validated anchors exactly.
+- Before returning the final JSON, call `get_neighbor_code_context` at least once for one of your chosen anchors.
+- Pass the anchor_line to inspect surrounding code and improve reasoning quality.
 """.strip()
 
 
@@ -90,146 +74,86 @@ def prepare_inline_context(state: InlineQuizGraphState) -> InlineQuizGraphState:
     }
 
 
-def extract_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphState:
+def generate_with_anchor(state: InlineQuizGraphState) -> InlineQuizGraphState:
+    """앵커 선정 + 질문 생성을 단일 LLM 호출로 수행."""
     commit_context = state["commit_context"]
-    prompt = build_inline_anchor_prompt(
+    count = state.get("count", 4)
+    actual_paths = state.get("actual_paths", [])
+    file_context_map = state.get("file_context_map", {})
+
+    prompt = build_inline_combined_prompt(
         commit_sha=str(commit_context.get("commit_sha", ""))[:7],
         commit_subject=commit_context.get("commit_subject", ""),
         changed_files_summary=commit_context.get("changed_files_summary", ""),
         diff_text=commit_context.get("diff_text", ""),
         file_context_text=commit_context.get("file_context_text", ""),
-        count=state.get("count", 4),
-        actual_paths=state.get("actual_paths", []),
-    )
-    anchor_payload = LLMClient().invoke_structured(
-        prompt,
-        InlineAnchorCandidateListStructuredOutput,
-    )
-    anchor_candidates = normalize_inline_anchor_candidates(
-        anchor_payload.model_dump()
-        if hasattr(anchor_payload, "model_dump")
-        else anchor_payload
-    )
-    return {"anchor_candidates": anchor_candidates}
-
-
-def validate_anchor_candidates(state: InlineQuizGraphState) -> InlineQuizGraphState:
-    actual_paths = set(state.get("actual_paths", []))
-    file_context_map = state.get("file_context_map", {})
-    validated: list[dict] = []
-    seen_pairs: set[tuple[str, int]] = set()
-
-    for candidate in state.get("anchor_candidates", []):
-        file_path = str(candidate.get("file_path", "")).strip()
-        try:
-            anchor_line = int(candidate.get("anchor_line", 0))
-        except (TypeError, ValueError):
-            continue
-        question_type = str(candidate.get("question_type", "intent")).strip() or "intent"
-        reason = str(candidate.get("reason", "")).strip()
-        if file_path not in actual_paths:
-            continue
-        content = file_context_map.get(file_path, "")
-        line_count = len(content.splitlines()) if content else 0
-        if anchor_line < 1 or anchor_line > line_count:
-            continue
-        pair = (file_path, anchor_line)
-        if pair in seen_pairs:
-            continue
-        seen_pairs.add(pair)
-        validated.append(
-            {
-                "file_path": file_path,
-                "anchor_line": anchor_line,
-                "anchor_snippet": str(candidate.get("anchor_snippet", "")).strip(),
-                "question_type": question_type,
-                "reason": reason,
-            }
-        )
-        if len(validated) >= max(state.get("count", 4), 4):
-            break
-
-    if not validated:
-        for file_path in state.get("actual_paths", []):
-            content = file_context_map.get(file_path, "")
-            if not content or len(content.splitlines()) < 3:
-                continue
-            validated.append(
-                {
-                    "file_path": file_path,
-                    "anchor_line": 1,
-                    "anchor_snippet": "",
-                    "question_type": "intent",
-                    "reason": "파일 상단을 fallback anchor로 사용",
-                }
-            )
-            if len(validated) >= max(state.get("count", 4), 4):
-                break
-
-    return {"validated_anchors": validated}
-
-
-def generate_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState:
-    commit_context = state["commit_context"]
-    count = state.get("count", 4)
-    prompt = build_inline_question_prompt(
-        commit_sha=str(commit_context.get("commit_sha", ""))[:7],
-        commit_subject=commit_context.get("commit_subject", ""),
-        diff_text=commit_context.get("diff_text", ""),
-        file_context_text=commit_context.get("file_context_text", ""),
-        anchor_candidates_json=json.dumps(
-            state.get("validated_anchors", []), ensure_ascii=False, indent=2
-        ),
         count=count,
+        actual_paths=actual_paths,
         user_request=str(state.get("user_request", "")).strip(),
     )
-    tool = build_get_neighbor_code_context_tool(state.get("file_context_map", {}))
+    context_map = state.get("full_file_map") or file_context_map
+    tool = build_get_neighbor_code_context_tool(context_map)
     items_payload = LLMClient().invoke_json_with_tools(
         f"{prompt}\n\n{TOOL_USAGE_SUFFIX}",
         [tool],
         require_tool=True,
     )
     items = normalize_inline_questions(
-        items_payload.model_dump()
-        if hasattr(items_payload, "model_dump")
-        else items_payload
+        items_payload.model_dump() if hasattr(items_payload, "model_dump") else items_payload
     )
+
+    actual_paths_set = set(actual_paths)
     questions: list[InlineQuizQuestion] = []
-    validated_pairs = {
-        (item["file_path"], int(item.get("anchor_line", 0))): item
-        for item in state.get("validated_anchors", [])
-    }
+    validated_anchors: list[dict] = []
+
     for index, item in enumerate(items):
         file_path = str(item.get("file_path", ""))
         try:
             anchor_line = int(item.get("anchor_line", 0))
         except (TypeError, ValueError):
             anchor_line = 0
-        fallback = validated_pairs.get((file_path, anchor_line))
-        if fallback is None:
-            if index < len(state.get("validated_anchors", [])):
-                fallback = state["validated_anchors"][index]
-            elif state.get("validated_anchors"):
-                fallback = state["validated_anchors"][0]
-        if fallback is None:
-            continue
+
+        # 경로 보정
+        if file_path not in actual_paths_set:
+            if index < len(actual_paths):
+                file_path = actual_paths[index]
+            elif actual_paths:
+                file_path = actual_paths[0]
+            else:
+                continue
+
+        # 라인 범위 보정 — hunk 기반 file_context_map은 파일 전체를 반영하지 않으므로 full_file_map 우선
+        validation_map = state.get("full_file_map") or file_context_map
+        content = validation_map.get(file_path, "")
+        line_count = len(content.splitlines()) if content else 0
+        if anchor_line < 1 or (line_count > 0 and anchor_line > line_count):
+            anchor_line = 1
+
+        question_type = str(item.get("question_type", "intent")).strip() or "intent"
+        anchor_snippet = str(item.get("anchor_snippet", "")).strip()
+
+        anchor = {
+            "file_path": file_path,
+            "anchor_line": anchor_line,
+            "anchor_snippet": anchor_snippet,
+            "question_type": question_type,
+        }
+        validated_anchors.append(anchor)
         questions.append(
             InlineQuizQuestion(
                 id=str(item.get("id", f"q{len(questions) + 1}")),
-                file_path=fallback["file_path"],
-                anchor_line=int(fallback.get("anchor_line", 1)),
-                anchor_snippet=fallback.get("anchor_snippet", ""),
+                file_path=file_path,
+                anchor_line=anchor_line,
+                anchor_snippet=anchor_snippet,
                 question=str(item.get("question", "")).strip(),
                 expected_answer=str(item.get("expected_answer", "")).strip(),
-                question_type=str(
-                    item.get("question_type", fallback.get("question_type", "intent"))
-                ).strip()
-                or "intent",
+                question_type=question_type,
             )
         )
         if len(questions) >= count:
             break
-    return {"inline_questions": questions}
+
+    return {"inline_questions": questions, "validated_anchors": validated_anchors}
 
 
 def review_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState:
@@ -242,6 +166,7 @@ def review_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState
                 state.get("validated_anchors", []), ensure_ascii=False, indent=2
             ),
             user_request=str(state.get("user_request", "")).strip(),
+            count=state.get("count", 4),
         ),
         InlineQuestionReviewStructuredOutput,
     )
@@ -271,7 +196,8 @@ def repair_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphState
         + "\n\nAdditional revision instruction:\n"
         + str(state.get("inline_review", {}).get("revision_instruction", "")).strip()
     )
-    tool = build_get_neighbor_code_context_tool(state.get("file_context_map", {}))
+    context_map = state.get("full_file_map") or state.get("file_context_map", {})
+    tool = build_get_neighbor_code_context_tool(context_map)
     items_payload = LLMClient().invoke_json_with_tools(
         f"{repaired_prompt}\n\n{TOOL_USAGE_SUFFIX}",
         [tool],
@@ -327,7 +253,7 @@ def route_after_inline_review(state: InlineQuizGraphState) -> str:
     review = state.get("inline_review", {})
     if review.get("is_valid", True):
         return "finalize"
-    if int(state.get("repair_attempts", 0)) >= 1:
+    if int(state.get("repair_attempts", 0)) >= 2:
         return "finalize"
     return "repair"
 
@@ -357,18 +283,14 @@ def finalize_inline_questions(state: InlineQuizGraphState) -> InlineQuizGraphSta
 
 inline_quiz_graph_builder = StateGraph(InlineQuizGraphState)
 inline_quiz_graph_builder.add_node("prepare_inline_context", prepare_inline_context)
-inline_quiz_graph_builder.add_node("extract_anchor_candidates", extract_anchor_candidates)
-inline_quiz_graph_builder.add_node("validate_anchor_candidates", validate_anchor_candidates)
-inline_quiz_graph_builder.add_node("generate_inline_questions", generate_inline_questions)
+inline_quiz_graph_builder.add_node("generate_with_anchor", generate_with_anchor)
 inline_quiz_graph_builder.add_node("review_inline_questions", review_inline_questions)
 inline_quiz_graph_builder.add_node("repair_inline_questions", repair_inline_questions)
 inline_quiz_graph_builder.add_node("finalize_inline_questions", finalize_inline_questions)
 
 inline_quiz_graph_builder.add_edge(START, "prepare_inline_context")
-inline_quiz_graph_builder.add_edge("prepare_inline_context", "extract_anchor_candidates")
-inline_quiz_graph_builder.add_edge("extract_anchor_candidates", "validate_anchor_candidates")
-inline_quiz_graph_builder.add_edge("validate_anchor_candidates", "generate_inline_questions")
-inline_quiz_graph_builder.add_edge("generate_inline_questions", "review_inline_questions")
+inline_quiz_graph_builder.add_edge("prepare_inline_context", "generate_with_anchor")
+inline_quiz_graph_builder.add_edge("generate_with_anchor", "review_inline_questions")
 inline_quiz_graph_builder.add_conditional_edges(
     "review_inline_questions",
     route_after_inline_review,

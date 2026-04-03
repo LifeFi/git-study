@@ -161,6 +161,7 @@ class LLMClient:
         except Exception as exc:
             if _is_unretryable(exc):
                 raise
+            original_error = str(exc).strip()
             try:
                 return structured_llm.invoke(retry_prompt)
             except Exception as retry_exc:
@@ -175,13 +176,22 @@ class LLMClient:
                     return relaxed_structured_llm.invoke(retry_prompt)
                 except Exception:
                     try:
-                        return self.invoke_json(retry_prompt)
-                    except Exception as json_exc:
-                        detail = str(json_exc).strip()
-                        if len(detail) > 220:
-                            detail = f"{detail[:220]}..."
-                        raise ValueError(
-                            "LLM structured output 호출이 실패했습니다. "
-                            "모델이 스키마에 맞는 응답을 반환하지 못했습니다. "
-                            f"fallback_error={detail or str(retry_exc)}"
-                        ) from exc
+                        # json_schema 미지원 모델(gpt-4, gpt-3.5-turbo 등) 대응
+                        json_mode_llm = self._llm.with_structured_output(
+                            schema,
+                            method="json_mode",
+                        )
+                        return json_mode_llm.invoke(retry_prompt)
+                    except Exception:
+                        try:
+                            return self.invoke_json(retry_prompt)
+                        except Exception as json_exc:
+                            detail = str(json_exc).strip()
+                            if len(detail) > 200:
+                                detail = f"{detail[:200]}..."
+                            root = original_error[:200] if len(original_error) > 200 else original_error
+                            raise ValueError(
+                                "LLM structured output 호출이 실패했습니다. "
+                                "모델이 스키마에 맞는 응답을 반환하지 못했습니다. "
+                                f"원인: {root} | fallback_error={detail or str(retry_exc)}"
+                            ) from exc

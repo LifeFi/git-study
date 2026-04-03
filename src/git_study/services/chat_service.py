@@ -12,7 +12,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 ROUTE_LABELS: dict[str, str] = {
     "commit_question": "코드 리뷰어",
     "quiz_question": "퀴즈 튜터",
-    "general": "일반 대화",
+    "learning_path": "학습 어드바이저",
+    "general": "",
 }
 
 
@@ -42,6 +43,8 @@ def stream_chat(
     local_repo_root: Path | None = None,
     repo_source: str = "local",
     github_repo_url: str = "",
+    mentioned_snippets: dict[str, str] | None = None,
+    grade_context: dict | None = None,
 ) -> Iterator[dict]:
     """
     LangGraph SqliteSaver를 사용해 멀티 에이전트 채팅 스트리밍.
@@ -73,6 +76,8 @@ def stream_chat(
             tools,
             quiz_context=quiz_context,
             commit_diff_context=commit_diff_context,
+            mentioned_snippets=mentioned_snippets or {},
+            grade_context=grade_context,
         )
     except Exception as exc:
         yield {"type": "error", "content": str(exc)}
@@ -133,6 +138,11 @@ def stream_chat(
                                 yielded_any = True
                                 yield {"type": "token", "content": str(chunk.content)}
                         elif isinstance(chunk, AIMessage):
+                            # 비스트리밍 폴백: AIMessage로 텍스트가 통째로 온 경우
+                            if chunk.content and not full_content:
+                                full_content += str(chunk.content)
+                                yielded_any = True
+                                yield {"type": "token", "content": str(chunk.content)}
                             for tc in (chunk.tool_calls or []):
                                 yielded_any = True
                                 yield {

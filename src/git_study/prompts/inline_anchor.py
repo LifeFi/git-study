@@ -41,8 +41,19 @@ Rules:
 - file_path MUST exactly match one of the listed paths.
 - anchor_line MUST be a line number visible in the file context (the number before the | separator).
 - anchor_snippet is for your own verification — it does not need to be exact.
-- Prefer anchors that require reasoning about behavior, intent, risks, or trade-offs.
-- Avoid trivial anchors like imports or blank lines unless they are central to the change.
 - Cover all question_type values if possible.
 - Respond with ONLY JSON.
+
+Bad anchor examples — NEVER select these:
+- Import statements (e.g., `import os`, `from x import y`)
+- Variable declarations where the name makes the purpose obvious (e.g., `max_retries = 3`)
+- Lines identical in intent to the surrounding 3 lines (context provides no additional insight)
+- Blank lines, comment-only lines, closing braces or brackets
+
+Good anchor examples — PREFER these:
+- A condition that guards against a non-obvious edge case (removing it would cause a subtle bug)
+- A line that changed the previous behavior (visible in the diff as a modification)
+- Error handling whose absence would cause a hard-to-notice failure
+- A design decision point where the author chose one approach over an equally plausible alternative
+- A line that introduces a constraint, limit, or side effect not apparent from its name alone
 """.strip()

@@ -6,9 +6,7 @@ from ..types import InlineQuizQuestion
 
 INLINE_QUIZ_NODE_LABELS = {
     "prepare_inline_context": "파일 문맥 준비",
-    "extract_anchor_candidates": "앵커 후보 추출",
-    "validate_anchor_candidates": "앵커 검증",
-    "generate_inline_questions": "질문 생성",
+    "generate_with_anchor": "앵커 선정 + 질문 생성",
     "review_inline_questions": "품질 검토",
     "repair_inline_questions": "초안 수정",
     "finalize_inline_questions": "결과 정리",
@@ -19,15 +17,20 @@ def stream_inline_quiz_progress(
     commit_context: dict,
     count: int = 4,
     user_request: str = "",
+    full_file_map: dict | None = None,
 ) -> Iterator[dict]:
     merged_result: dict = {}
 
+    graph_input: dict = {
+        "commit_context": commit_context,
+        "count": count,
+        "user_request": user_request,
+    }
+    if full_file_map:
+        graph_input["full_file_map"] = full_file_map
+
     for chunk in inline_quiz_graph.stream(
-        {
-            "commit_context": commit_context,
-            "count": count,
-            "user_request": user_request,
-        },
+        graph_input,
         stream_mode="updates",
     ):
         if not isinstance(chunk, dict):
@@ -48,12 +51,14 @@ def generate_inline_quiz_questions(
     commit_context: dict,
     count: int = 4,
     user_request: str = "",
+    full_file_map: dict | None = None,
 ) -> list[InlineQuizQuestion]:
-    result = inline_quiz_graph.invoke(
-        {
-            "commit_context": commit_context,
-            "count": count,
-            "user_request": user_request,
-        }
-    )
+    graph_input: dict = {
+        "commit_context": commit_context,
+        "count": count,
+        "user_request": user_request,
+    }
+    if full_file_map:
+        graph_input["full_file_map"] = full_file_map
+    result = inline_quiz_graph.invoke(graph_input)
     return result.get("inline_questions", [])
