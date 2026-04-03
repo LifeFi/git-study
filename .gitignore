@@ -24,3 +24,14 @@ secrets.toml
 # Agents
 .claude*
 
+# oh-my-claudecode runtime state
+.omc/
+
+# 일회성 분석 아티팩트 (에이전트 생성)
+ADDITIONAL_AGENTS_DISCOVERED.md
+AGENT_ROLES_DETAILED.md
+ARCHITECTURE_INDEX.md
+GRAPHS_QUICK_REFERENCE.md
+LANGGRAPH_ARCHITECTURE.md
+QUICK_START.md
+
