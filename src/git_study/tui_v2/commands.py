@@ -68,7 +68,8 @@ def parse_command(text: str) -> ParsedCommand:
     if text.startswith("/resume"):
         return ParsedCommand(kind="resume", raw=text)
     if text.startswith("/install-hook"):
-        return ParsedCommand(kind="install-hook", raw=text)
+        parts = text.split(None, 1)
+        return ParsedCommand(kind="install-hook", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
     if text.startswith("/uninstall-hook"):
         return ParsedCommand(kind="uninstall-hook", raw=text)
     if text and not text.startswith("/"):

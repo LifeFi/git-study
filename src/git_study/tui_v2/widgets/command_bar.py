@@ -27,7 +27,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/repo", "저장소 전환 (URL 또는 경로)"),
     ("/apikey", "OpenAI API key 설정"),
     ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
-    ("/install-hook", "현재 저장소에 post-commit hook 설치"),
+    ("/install-hook", "현재 저장소에 post-commit hook 설치 (예: /install-hook iterm2)"),
     ("/uninstall-hook", "post-commit hook 제거"),
     ("/help", "도움말"),
     ("/exit", "종료 (quit, Ctrl+Q 가능)"),

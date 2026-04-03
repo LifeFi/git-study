@@ -396,7 +396,7 @@ class GitStudyAppV2(App):
             case "resume":
                 self._handle_resume()
             case "install-hook":
-                self._handle_install_hook()
+                self._handle_install_hook(cmd.range_arg)
             case "uninstall-hook":
                 self._handle_uninstall_hook()
             case _:
@@ -1043,7 +1043,7 @@ class GitStudyAppV2(App):
             ("Ctrl+Q", "종료"),
         ])
 
-    def _handle_install_hook(self) -> None:
+    def _handle_install_hook(self, terminal: str = "") -> None:
         import stat
 
         repo_root = self._local_repo_root
@@ -1052,12 +1052,17 @@ class GitStudyAppV2(App):
             return
 
         hook_path = repo_root / ".git" / "hooks" / "post-commit"
-        block = _build_hook_block(repo_root)
+        block = _build_hook_block(repo_root, terminal or "auto")
 
         if hook_path.exists():
             content = hook_path.read_text()
             if _has_hook(content):
-                self._set_status("✓ git-study hook 이 이미 설치되어 있습니다.")
+                # 기존 블록 제거 후 새 블록으로 교체
+                stripped = _strip_hook(content)
+                base = stripped if stripped.strip() not in ("", "#!/bin/sh") else "#!/bin/sh"
+                hook_path.write_text(base.rstrip("\n") + "\n" + block)
+                hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                self._set_status(f"✓ hook 업데이트 완료: {hook_path}")
                 return
             with hook_path.open("a") as f:
                 f.write(f"\n{block}")
@@ -2255,15 +2260,55 @@ _HOOK_BEGIN = "# BEGIN git-study-hook"
 _HOOK_END = "# END git-study-hook"
 
 
-def _build_hook_block(repo_path: Path) -> str:
+_TERMINAL_ALIASES: dict[str, str] = {
+    "terminal": "Terminal",
+    "terminal.app": "Terminal",
+    "iterm": "iTerm2",
+    "iterm2": "iTerm2",
+    "warp": "Warp",
+}
+
+
+def _build_osascript(app_name: str, cmd: str) -> str:
+    """터미널 앱별 osascript 명령 생성."""
+    if app_name == "iTerm2":
+        return f'osascript -e \'tell application "iTerm2" to create window with default profile command "{cmd}"\''
+    # Terminal.app, Warp 등 do script 방식
+    return f'osascript -e \'tell application "{app_name}" to do script "{cmd}"\''
+
+
+def _build_hook_block(repo_path: Path, terminal: str = "auto") -> str:
     """post-commit hook 스크립트 블록 생성."""
-    escaped = str(repo_path).replace('"', '\\"')
+    # AppleScript 문자열 내부용: " → \"
+    as_path = str(repo_path).replace('"', '\\"')
+    # shell 단일따옴표 문자열 내부용: ' → '\''
+    as_path_shell = as_path.replace("'", "'\\''")
+    shell_cmd = f'cd \\"{as_path_shell}\\" && git-study-v2 --auto-quiz HEAD'
+
+    if terminal.lower() in ("", "auto"):
+        # 실행 시점에 현재 떠 있는 터미널 자동 감지
+        iterm_cmd  = _build_osascript("iTerm2", shell_cmd)
+        warp_cmd   = _build_osascript("Warp", shell_cmd)
+        term_cmd   = _build_osascript("Terminal", shell_cmd)
+        mac_block = (
+            f'  if pgrep -x "iTerm2" > /dev/null 2>&1; then\n'
+            f'    {iterm_cmd} &\n'
+            f'  elif pgrep -x "Warp" > /dev/null 2>&1; then\n'
+            f'    {warp_cmd} &\n'
+            f'  else\n'
+            f'    {term_cmd} &\n'
+            f'  fi'
+        )
+    else:
+        app_name = _TERMINAL_ALIASES.get(terminal.lower(), terminal)
+        mac_block = f'  {_build_osascript(app_name, shell_cmd)} &'
+
     return (
         f"{_HOOK_BEGIN}\n"
         f'if command -v osascript > /dev/null 2>&1; then\n'
-        f'  osascript -e \'tell application "Terminal" to do script "cd \\"{escaped}\\" && git-study-v2 --auto-quiz HEAD"\' &\n'
+        f'{mac_block}\n'
         f'else\n'
-        f'  [ -t 1 ] && git-study-v2 --auto-quiz HEAD "{escaped}"\n'
+        f'  [ -t 1 ] && git-study-v2 --auto-quiz HEAD "{as_path}"\n'
         f'fi\n'
         f"{_HOOK_END}\n"
     )
@@ -2294,12 +2339,37 @@ def _strip_hook(content: str) -> str:
     return "".join(result).rstrip("\n")
 
 
+def _parse_terminal_arg(argv: list[str]) -> str:
+    """--terminal NAME 파싱. 없으면 'auto' 반환."""
+    for i, a in enumerate(argv):
+        if a == "--terminal" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--terminal="):
+            return a.split("=", 1)[1]
+    return "auto"
+
+
 def _install_hook_command(argv: list[str]) -> None:
-    """git-study-v2 install-hook [path] [--force]"""
+    """git-study-v2 install-hook [path] [--terminal NAME] [--force]"""
     import stat
 
     force = "--force" in argv
-    path_args = [a for a in argv if not a.startswith("--")]
+    terminal = _parse_terminal_arg(argv)
+
+    # --terminal NAME 값과 플래그를 제외한 위치 인자만 추출
+    skip_next = False
+    path_args = []
+    for a in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--terminal":
+            skip_next = True
+            continue
+        if a.startswith("--"):
+            continue
+        path_args.append(a)
+
     repo_path = Path(path_args[0]).expanduser().resolve() if path_args else Path.cwd()
 
     git_dir = repo_path / ".git"
@@ -2308,16 +2378,20 @@ def _install_hook_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
     hook_path = git_dir / "hooks" / "post-commit"
-    block = _build_hook_block(repo_path)
+    block = _build_hook_block(repo_path, terminal)
 
-    if hook_path.exists() and not force:
+    if hook_path.exists():
         content = hook_path.read_text()
         if _has_hook(content):
-            print("✓ git-study hook 이 이미 설치되어 있습니다.")
-            return
-        with hook_path.open("a") as f:
-            f.write(f"\n{block}")
-        print(f"✓ git-study hook 을 기존 post-commit 에 추가했습니다: {hook_path}")
+            # 기존 블록 제거 후 새 블록으로 교체
+            stripped = _strip_hook(content)
+            base = stripped if stripped.strip() not in ("", "#!/bin/sh") else "#!/bin/sh"
+            hook_path.write_text(base.rstrip("\n") + "\n" + block)
+            print(f"✓ git-study hook 업데이트 완료: {hook_path}")
+        else:
+            with hook_path.open("a") as f:
+                f.write(f"\n{block}")
+            print(f"✓ git-study hook 을 기존 post-commit 에 추가했습니다: {hook_path}")
     else:
         hook_path.parent.mkdir(parents=True, exist_ok=True)
         hook_path.write_text(f"#!/bin/sh\n{block}")
@@ -2376,7 +2450,8 @@ def run_v2() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 서브커맨드:
-  install-hook [path] [--force]   현재(또는 지정) 저장소에 post-commit hook 설치
+  install-hook [path] [--terminal NAME] [--force]   현재(또는 지정) 저장소에 post-commit hook 설치
+                                        (NAME: terminal, iterm2, warp. 기본값: terminal)
   uninstall-hook [path]           post-commit hook 제거
 
 TUI 명령어 (앱 실행 후):
