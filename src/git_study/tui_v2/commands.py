@@ -10,6 +10,11 @@ CommandKind = Literal["quiz", "grade", "review", "help", "commits", "answer", "e
 _MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
 
 
+QUIZ_COUNT_DEFAULT = 4
+QUIZ_COUNT_MIN = 1
+QUIZ_COUNT_MAX = 10
+
+
 @dataclass(frozen=True)
 class ParsedCommand:
     kind: CommandKind
@@ -18,6 +23,7 @@ class ParsedCommand:
     mentioned_files: tuple = ()
     # tuple of (file_path: str, start_line: int, end_line: int)
     # end_line=0 means entire file
+    quiz_count: int = QUIZ_COUNT_DEFAULT
 
 
 def parse_command(text: str) -> ParsedCommand:
@@ -41,10 +47,19 @@ def parse_command(text: str) -> ParsedCommand:
         )
     if text.startswith("/quiz"):
         parts = text.split(None, 1)
+        arg = parts[1] if len(parts) > 1 else ""
+        quiz_count = QUIZ_COUNT_DEFAULT
+        range_arg = arg
+        if arg:
+            tokens = arg.split()
+            if tokens[-1].isdigit():
+                quiz_count = max(QUIZ_COUNT_MIN, min(int(tokens[-1]), QUIZ_COUNT_MAX))
+                range_arg = " ".join(tokens[:-1])
         return ParsedCommand(
             kind="quiz",
-            range_arg=parts[1] if len(parts) > 1 else "",
+            range_arg=range_arg,
             raw=text,
+            quiz_count=quiz_count,
         )
     if text.startswith("/grade"):
         return ParsedCommand(kind="grade", raw=text)
