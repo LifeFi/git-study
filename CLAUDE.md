@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 마이그레이션 계획
+
+현재 TypeScript 완전 전환 작업 예정. 자세한 계획은 `MIGRATION_PLAN.md` 참고.
+
 ## Commands
 
 ```bash
@@ -13,6 +17,9 @@ UV_CACHE_DIR=/tmp/uv-cache uv run git-study-v2
 
 # v1 TUI 실행 (레거시, 건드리지 않음)
 UV_CACHE_DIR=/tmp/uv-cache uv run git-study
+
+# Streamlit 채팅 앱 실행
+UV_CACHE_DIR=/tmp/uv-cache uv run git-study-streamlit
 ```
 
 환경 변수: `.env` 파일에 `OPENAI_API_KEY` 필요. `load_dotenv()`로 자동 로드됨.
@@ -25,14 +32,20 @@ UV_CACHE_DIR=/tmp/uv-cache uv run git-study
 
 ```
 src/git_study/
+├── streamlit_app.py         ← 웹 채팅 앱 (저장소 선택 + 커밋 컨텍스트 + 채팅)
+├── types.py                 ← 공용 TypedDict (InlineQuizQuestion, InlineQuizGrade 등)
 ├── tui_v2/                  ← 현재 작업 중인 TUI (v2)
 │   ├── app.py               ← 메인 앱 GitStudyAppV2
 │   ├── commands.py          ← 명령어 파싱 (/quiz, /grade, /commits, /answer, /help)
 │   ├── screens/
-│   │   └── commit_picker.py ← 커밋 범위 선택 모달 (CommitPickerScreen)
+│   │   ├── commit_picker.py ← 커밋 범위 선택 모달 (CommitPickerScreen)
+│   │   ├── repo_picker.py   ← 저장소 선택 모달 (RepoPickerScreen)
+│   │   └── thread_picker.py ← 대화 스레드 선택 모달 (ThreadPickerScreen)
 │   └── widgets/
-│       ├── command_bar.py   ← 하단 상태바 + 입력창 (CommandBar)
-│       └── inline_code_view.py ← 파일 트리 + 코드 뷰 + 퀴즈 블록 (InlineCodeView)
+│       ├── command_bar.py      ← 하단 입력창 (CommandBar)
+│       ├── inline_code_view.py ← 파일 트리 + 코드 뷰 + 퀴즈 블록 (InlineCodeView)
+│       ├── app_status_bar.py   ← 상단 상태바 (AppStatusBar)
+│       └── history_view.py     ← 대화 히스토리 뷰 (HistoryView)
 ├── tui/                     ← v1 레거시 (공용 유틸 일부 재사용)
 │   ├── commit_selection.py  ← CommitSelection 데이터클래스 (v2에서 import)
 │   ├── state.py             ← 앱 상태 저장/로드 (v2에서 import)
@@ -40,11 +53,22 @@ src/git_study/
 ├── domain/                  ← 비즈니스 로직 (Git 접근, 컨텍스트 빌드)
 │   ├── repo_context.py      ← get_repo(), get_commit_list_snapshot(), build_commit_context()
 │   ├── code_context.py      ← get_file_content_at_commit_or_empty(), detect_code_language()
-│   └── inline_anchor.py     ← find_anchor_line(), parse_file_context_blocks()
-├── services/                ← LangGraph AI 서비스
-│   ├── inline_quiz_service.py  ← stream_inline_quiz_progress()
-│   └── inline_grade_service.py ← stream_inline_grade_progress()
-└── types.py                 ← InlineQuizQuestion, InlineQuizGrade TypedDict
+│   ├── inline_anchor.py     ← find_anchor_line(), parse_file_context_blocks()
+│   ├── repo_cache.py        ← 원격 저장소 캐시 관리
+│   ├── general_quiz.py      ← 일반 퀴즈 렌더링 유틸
+│   └── quiz_parsing.py      ← 마크다운 퀴즈 파싱
+├── services/                ← LangGraph AI 서비스 진입점
+│   ├── inline_quiz_service.py   ← stream_inline_quiz_progress()
+│   ├── inline_grade_service.py  ← stream_inline_grade_progress()
+│   ├── quiz_service.py          ← stream_quiz_progress()
+│   ├── general_grade_service.py ← stream_general_grade_progress()
+│   ├── read_service.py          ← stream_read_progress()
+│   └── chat_service.py          ← stream_chat() (Streamlit 채팅용)
+├── graphs/                  ← LangGraph 워크플로우 정의
+├── prompts/                 ← LLM 프롬프트 템플릿
+├── llm/                     ← LLM 통합 (client.py, schemas.py)
+└── tools/
+    └── code_context.py      ← get_neighbor_code_context tool
 ```
 
 ---
