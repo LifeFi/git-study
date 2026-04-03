@@ -7,6 +7,30 @@ from .runtime_paths import get_global_runtime_dir
 DEFAULT_MODEL = "gpt-4o-mini"
 ApiKeyMode = Literal["session", "file"]
 
+SUGGESTED_MODELS: list[str] = [
+    # GPT-5.4 계열 (최신 플래그십)
+    "gpt-5.4",
+    "gpt-5.4-pro",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    # GPT-5 계열
+    "gpt-5",
+    "gpt-5-mini",
+    # GPT-4.1 계열
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    # GPT-4o 계열
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.5-preview",
+    # o-series 추론 모델
+    "o4-mini",
+    "o3",
+    "o3-pro",
+    "o3-mini",
+]
+
 
 class AppSettings(TypedDict):
     model: str
