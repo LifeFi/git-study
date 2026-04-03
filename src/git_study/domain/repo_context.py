@@ -4,6 +4,7 @@ from typing import Literal
 from git import NULL_TREE, GitCommandError, Repo
 
 from ..domain.code_context import (
+    MAX_FILE_CONTEXT_CHARS,
     build_file_context_text,
     build_range_file_context_text,
     extract_patch_text,
@@ -204,14 +205,15 @@ def build_changed_files_summary(commit) -> str:
 
 
 def build_commit_context(commit, selected_reason: str, repo: Repo) -> dict[str, str]:
+    raw_diff = extract_patch_text(commit)
     return {
         "commit_sha": commit.hexsha,
         "commit_subject": commit.summary,
         "commit_author": str(commit.author),
         "commit_date": commit.committed_datetime.isoformat(),
         "changed_files_summary": build_changed_files_summary(commit),
-        "diff_text": sanitize_diff(extract_patch_text(commit)),
-        "file_context_text": build_file_context_text(commit, repo),
+        "diff_text": sanitize_diff(raw_diff),
+        "file_context_text": build_file_context_text(commit, repo, raw_diff=raw_diff),
         "selected_reason": selected_reason,
     }
 
@@ -237,9 +239,12 @@ def build_multi_commit_context(commits, selected_reason: str, repo: Repo) -> dic
     newest_commit = commits[0]
     oldest_commit = commits[-1]
     base_commit = oldest_commit.parents[0] if oldest_commit.parents else NULL_TREE
-    range_diff_text = sanitize_diff(extract_range_patch_text(base_commit, newest_commit))
+    range_raw_diff = extract_range_patch_text(base_commit, newest_commit)
+    range_diff_text = sanitize_diff(range_raw_diff)
     range_changed_files_summary = build_range_changed_files_summary(base_commit, newest_commit)
-    range_file_context_text = build_range_file_context_text(base_commit, newest_commit, repo)
+    range_file_context_text = build_range_file_context_text(
+        base_commit, newest_commit, repo, raw_diff=range_raw_diff
+    )
     per_commit_changed_files = [
         f"[{part['commit_sha'][:7]}] {part['commit_subject']}\n{part['changed_files_summary']}"
         for part in parts
@@ -267,7 +272,7 @@ def build_multi_commit_context(commits, selected_reason: str, repo: Repo) -> dic
                 "[Per-commit file context]",
             ]
             + per_commit_file_context
-        )[:12_000].strip(),
+        )[:MAX_FILE_CONTEXT_CHARS].strip(),
         "selected_reason": selected_reason,
     }
 
