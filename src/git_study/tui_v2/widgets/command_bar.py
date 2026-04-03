@@ -30,7 +30,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/install-hook", "현재 저장소에 post-commit hook 설치"),
     ("/uninstall-hook", "post-commit hook 제거"),
     ("/help", "도움말"),
-    ("/exit", "종료"),
+    ("/exit", "종료 (quit, Ctrl+Q 가능)"),
 ]
 
 _MODEL_DESCRIPTIONS: dict[str, str] = {
@@ -76,9 +76,13 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
                 results.append((f"/model {model}", desc))
         return results
 
-    # /뒤의 쿼리를 각 명령어의 / 이후 텍스트에서 부분 매칭 (대소문자 무시)
+    # /뒤의 쿼리를 명령어 + 설명 전체에서 부분 매칭 (대소문자 무시)
     query = lower[1:]  # leading "/" 제거
-    return [(cmd, desc) for cmd, desc in _COMMANDS if query in cmd[1:].lower()]
+    return [
+        (cmd, desc)
+        for cmd, desc in _COMMANDS
+        if query in cmd[1:].lower() or query in desc.lower()
+    ]
 
 
 class CommandBar(Widget):
