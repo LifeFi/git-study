@@ -344,6 +344,33 @@ class GitStudyAppV2(App):
         # 현재 repo_source + URL/경로를 state에 저장 (재시작 시 복원용)
         self._save_app_state()
 
+        # Phase 3.5: --auto-quiz이면 Phase 4 전에 HEAD SHA로 범위 override
+        # 이렇게 해야 Phase 4의 _try_restore_session()이 HEAD 세션을 확인한다
+        if self._auto_quiz_arg is not None:
+            try:
+                auto_oldest, auto_newest = self._resolve_range(self._auto_quiz_arg)
+                self._oldest_sha = auto_oldest
+                self._newest_sha = auto_newest
+                code_view.show_range(
+                    repo_source=self._repo_source,
+                    github_repo_url=self._github_repo_url,
+                    oldest_commit_sha=auto_oldest,
+                    newest_commit_sha=auto_newest,
+                    local_repo_root=self._local_repo_root,
+                )
+                try:
+                    sha_index_auto = {c.get("sha", ""): i for i, c in enumerate(commits)}
+                    o_idx = sha_index_auto.get(auto_oldest, 0)
+                    n_idx = sha_index_auto.get(auto_newest, 0)
+                    count = abs(o_idx - n_idx) + 1
+                    status_bar = self.query_one("#app-status", AppStatusBar)
+                    status_bar.set_range(auto_oldest, auto_newest, count)
+                except Exception:
+                    pass
+                self._sync_commit_selection(auto_oldest, auto_newest)
+            except Exception:
+                pass  # resolve 실패 시 기존 범위 유지
+
         # Phase 4: restore quiz session if exists for this range
         session_restored = self._try_restore_session()
         self._update_hook_status()
@@ -358,7 +385,7 @@ class GitStudyAppV2(App):
                 f"저장소 로드 완료 ({len(commits)} commits).{hook_hint}"
             )
 
-        # Phase 5: auto-quiz if --auto-quiz flag was passed
+        # Phase 5: auto-quiz이면 HEAD 세션이 없을 때만 새 quiz 생성
         if self._auto_quiz_arg is not None and not session_restored:
             self.call_after_refresh(self._start_quiz, self._auto_quiz_arg)
 
