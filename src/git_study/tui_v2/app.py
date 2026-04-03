@@ -2272,7 +2272,11 @@ _TERMINAL_ALIASES: dict[str, str] = {
 def _build_osascript(app_name: str, cmd: str) -> str:
     """터미널 앱별 osascript 명령 생성."""
     if app_name == "iTerm2":
-        return f'osascript -e \'tell application "iTerm2" to create window with default profile command "{cmd}"\''
+        # create window → 인터랙티브 세션에 명령 입력 (command 파라미터는 종료 시 창 닫힘)
+        return (
+            f'osascript -e \'tell application "iTerm2" to tell (create window with default profile)'
+            f' to tell current session to write text "{cmd}"\''
+        )
     # Terminal.app, Warp 등 do script 방식
     return f'osascript -e \'tell application "{app_name}" to do script "{cmd}"\''
 
