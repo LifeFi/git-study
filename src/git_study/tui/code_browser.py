@@ -1,4 +1,5 @@
 from difflib import SequenceMatcher, unified_diff
+from functools import lru_cache
 
 from pygments import highlight
 from pygments.formatters import Terminal256Formatter
@@ -211,7 +212,9 @@ def render_current_code_text(language: str, base_content: str, target_content: s
     return rendered
 
 
-def highlight_code_lines(content: str, language: str) -> list[Text]:
+@lru_cache(maxsize=32)
+def _highlight_code_lines_cached(content: str, language: str) -> tuple[Text, ...]:
+    """Pygments 하이라이팅 결과를 LRU 캐시로 보관 (파일 전환 시 재계산 방지)."""
     lexer = TextLexer()
     if language and language != "text":
         try:
@@ -229,8 +232,12 @@ def highlight_code_lines(content: str, language: str) -> list[Text]:
         highlighted_lines = highlighted_lines[:expected_line_count]
 
     if not highlighted_lines:
-        return [Text()]
-    return highlighted_lines
+        return (Text(),)
+    return tuple(highlighted_lines)
+
+
+def highlight_code_lines(content: str, language: str) -> list[Text]:
+    return list(_highlight_code_lines_cached(content, language))
 
 
 def tint_line(line: Text, style: str, pad_to: int = 0) -> Text:
