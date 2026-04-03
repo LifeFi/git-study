@@ -26,16 +26,59 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/resume", "이전 대화 불러오기"),
     ("/repo", "저장소 전환 (URL 또는 경로)"),
     ("/apikey", "OpenAI API key 설정"),
+    ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
+    ("/install-hook", "현재 저장소에 post-commit hook 설치"),
+    ("/uninstall-hook", "post-commit hook 제거"),
     ("/help", "도움말"),
     ("/exit", "종료"),
 ]
 
+_MODEL_DESCRIPTIONS: dict[str, str] = {
+    "gpt-5.4": "최신 플래그십",
+    "gpt-5.4-pro": "고성능 플래그십",
+    "gpt-5.4-mini": "코딩·서브에이전트",
+    "gpt-5.4-nano": "초저가 대량 작업",
+    "gpt-5": "GPT-5 기본",
+    "gpt-5-mini": "GPT-5 소형",
+    "gpt-4.1": "코딩·instruction 특화",
+    "gpt-4.1-mini": "소형 저비용",
+    "gpt-4.1-nano": "초소형",
+    "gpt-4o": "멀티모달",
+    "gpt-4o-mini": "빠르고 저렴 (기본값)",
+    "gpt-4.5-preview": "GPT-4.5 프리뷰",
+    "o4-mini": "추론 모델 (빠름)",
+    "o3": "고성능 추론",
+    "o3-pro": "고성능 추론 강화",
+    "o3-mini": "수학·과학·코딩",
+}
 
-def _filter_candidates(text: str) -> list[tuple[str, str]]:
+
+def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
+    """/ 명령어 자동완성 후보 반환."""
     if not text or not text.startswith("/"):
         return []
     lower = text.lower()
-    return [(cmd, desc) for cmd, desc in _COMMANDS if cmd.startswith(lower)]
+
+    if lower == "/model" or lower.startswith("/model "):
+        from ...settings import SUGGESTED_MODELS, DEFAULT_MODEL, load_settings
+
+        query = lower[len("/model") :].strip()
+        try:
+            current = load_settings().get("model", DEFAULT_MODEL)
+        except Exception:
+            current = DEFAULT_MODEL
+        results = []
+        for model in SUGGESTED_MODELS:
+            if not query or model.lower().startswith(query):
+                desc = _MODEL_DESCRIPTIONS.get(model, "")
+                if model == current:
+                    desc = f"● {desc}" if desc else "● 현재 모델"
+                results.append((f"/model {model}", desc))
+        return results
+
+    # /뒤의 쿼리를 각 명령어의 / 이후 텍스트에서 부분 매칭 (대소문자 무시)
+    query = lower[1:]  # leading "/" 제거
+    return [(cmd, desc) for cmd, desc in _COMMANDS if query in cmd[1:].lower()]
 
 
 class CommandBar(Widget):
@@ -165,6 +208,7 @@ class CommandBar(Widget):
     _ac_candidates: list[tuple[str, str]]
     _ac_index: int
     _showing_help: bool
+    _mention_files: list[str]  # App이 주입하는 파일 목록 (@-mention 자동완성용)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -177,6 +221,7 @@ class CommandBar(Widget):
         self._ac_candidates = []
         self._ac_index = -1
         self._showing_help = False
+        self._mention_files = []
 
     # ------------------------------------------------------------------
     # Compose
@@ -185,7 +230,7 @@ class CommandBar(Widget):
     def compose(self) -> ComposeResult:
         yield Static(self.status_text, id="cb-status")
         with Horizontal(id="cb-input-row"):
-            yield Static(">", id="cb-prompt")
+            yield Static("❯", id="cb-prompt")
             yield Input(placeholder="/quiz HEAD~3", id="cb-input")
         with Horizontal(id="cb-answer-row"):
             yield Static("A", id="cb-answer-prompt")
@@ -267,6 +312,85 @@ class CommandBar(Widget):
         else:
             self.query_one("#cb-input", Input).focus()
 
+    def set_mention_files(self, paths: list[str]) -> None:
+        """App이 현재 커밋 파일 목록을 주입. @-mention 자동완성에 사용."""
+        self._mention_files = list(paths)
+
+    def insert_mention(self, file_path: str, start: int = 0, end: int = 0) -> None:
+        """코드뷰 push 또는 자동완성 선택 시 입력창에 @file[start-end] 삽입."""
+        if start > 0 and end > 0:
+            mention_text = f"@{file_path}[{start}-{end}]"
+        else:
+            mention_text = f"@{file_path}"
+        try:
+            inp = self.query_one("#cb-input", Input)
+            current = inp.value
+            if current and not current.endswith(" "):
+                inp.value = current + " " + mention_text + " "
+            else:
+                inp.value = (current or "") + mention_text + " "
+            inp.cursor_position = len(inp.value)
+        except Exception:
+            pass
+
+    def _get_ac_candidates(self, text: str) -> list[tuple[str, str]]:
+        """입력 텍스트에 따라 자동완성 후보 반환 (/ 명령어 또는 @ 멘션)."""
+        if text.startswith("@"):
+            query = text[1:]
+            if "[" in query:
+                return []
+            # 캐시된 파일 목록 없으면 code view에서 직접 가져오기 (fallback)
+            mention_files = self._mention_files
+            if not mention_files:
+                try:
+                    code_view = self.app.query_one("#code-view")
+                    mention_files = list(getattr(code_view, "file_paths", []))
+                    if mention_files:
+                        self._mention_files = mention_files
+                except Exception:
+                    pass
+            lower_query = query.lower()
+
+            # 현재 디렉토리 prefix와 이름 필터 분리
+            # 예) "src/git" → current_dir="src/", name_filter="git"
+            #     "src/"   → current_dir="src/", name_filter=""
+            #     "foo"    → current_dir="",      name_filter="foo"
+            if "/" in lower_query:
+                slash_idx = lower_query.rfind("/")
+                current_dir = lower_query[: slash_idx + 1]
+                name_filter = lower_query[slash_idx + 1 :]
+            else:
+                current_dir = ""
+                name_filter = lower_query
+
+            results: list[tuple[str, str]] = []
+            seen_dirs: set[str] = set()
+
+            for path in mention_files:
+                lower_path = path.lower()
+                # 현재 디렉토리 하위에 있는 파일만
+                if not lower_path.startswith(current_dir):
+                    continue
+                # current_dir 이후 남은 경로
+                rest = path[len(current_dir) :]
+                # 이름 필터 매칭
+                if name_filter and name_filter not in rest.lower():
+                    continue
+                # 바로 아래 단계만: rest에 '/'가 있으면 폴더, 없으면 파일
+                parts = rest.split("/")
+                if len(parts) > 1:
+                    sub_dir = current_dir + parts[0] + "/"
+                    if sub_dir not in seen_dirs:
+                        seen_dirs.add(sub_dir)
+                        results.append((f"@{sub_dir}", ""))
+                else:
+                    results.append((f"@{path}", ""))
+
+            # 폴더(/) 먼저, 그 다음 파일
+            results.sort(key=lambda x: (0 if x[0].endswith("/") else 1, x[0]))
+            return results
+        return _filter_slash_candidates(text)
+
     def action_prev_question(self) -> None:
         self.post_message(self.PrevQuestion())
 
@@ -274,12 +398,20 @@ class CommandBar(Widget):
         self.post_message(self.NextQuestion())
 
     def action_tab_pressed(self) -> None:
-        if self.mode == "command" and self._ac_candidates and 0 <= self._ac_index < len(self._ac_candidates):
+        if (
+            self.mode == "command"
+            and self._ac_candidates
+            and 0 <= self._ac_index < len(self._ac_candidates)
+        ):
             cmd, _ = self._ac_candidates[self._ac_index]
             self._close_autocomplete()
             inp = self.query_one("#cb-input", Input)
-            inp.value = cmd
-            inp.cursor_position = len(cmd)
+            if cmd.startswith("@"):
+                inp.value = cmd if cmd.endswith("/") else cmd + "["
+                inp.cursor_position = len(inp.value)
+            else:
+                inp.value = cmd
+                inp.cursor_position = len(cmd)
         else:
             try:
                 self.app.handle_tab_no_autocomplete()
@@ -347,21 +479,38 @@ class CommandBar(Widget):
         try:
             t = Text()
             for i, (cmd, desc) in enumerate(self._ac_candidates):
-                if i == self._ac_index:
-                    t.append(f"   {cmd:<20}", style="bold color(99)")
-                    t.append(f" {desc}", style="bold color(99)")
+                is_selected = i == self._ac_index
+                is_current = desc.startswith("● ")
+                rest_desc = desc[2:] if is_current else desc
+
+                if is_selected:
+                    t.append(f" ▶ {cmd:<22}", style="bold white on color(99)")
+                    t.append(" ", style="bold white on color(99)")
+                    if is_current:
+                        t.append("●", style="bold bright_green on color(99)")
+                        t.append(f" {rest_desc} ", style="bold white on color(99)")
+                    else:
+                        t.append(f"{rest_desc} ", style="bold white on color(99)")
                 else:
-                    t.append(f"   {cmd:<20}", style="dim")
-                    t.append(f" {desc}", style="dim")
+                    t.append(f"   {cmd:<22}", style="dim")
+                    t.append(" ", style="dim")
+                    if is_current:
+                        t.append("●", style="bold bright_green")
+                        t.append(f" {rest_desc}", style="dim")
+                    else:
+                        t.append(f"{rest_desc}", style="dim")
+
                 if i < len(self._ac_candidates) - 1:
                     t.append("\n")
             self.app.query_one("#cb-ac-list", Static).update(t)
             try:
                 scroll = self.app.query_one("#cb-autocomplete")
-                visible_height = 5
+                visible_height = 8
                 current_top = int(scroll.scroll_y)
                 if self._ac_index >= current_top + visible_height:
-                    scroll.scroll_to(y=self._ac_index - visible_height + 1, animate=False)
+                    scroll.scroll_to(
+                        y=self._ac_index - visible_height + 1, animate=False
+                    )
                 elif self._ac_index < current_top:
                     scroll.scroll_to(y=self._ac_index, animate=False)
             except Exception:
@@ -374,7 +523,25 @@ class CommandBar(Widget):
             cmd, _ = self._ac_candidates[self._ac_index]
             self._close_autocomplete()
             text = cmd.strip()
-            if not text.startswith("/") and (not self._history or self._history[-1] != text):
+
+            # @ 멘션 선택
+            if text.startswith("@"):
+                try:
+                    inp = self.query_one("#cb-input", Input)
+                    if text.endswith("/"):
+                        # 폴더 선택: @dir/ 채우고 on_input_changed가 자동완성 재트리거
+                        inp.value = text
+                    else:
+                        # 파일 선택: @file.py[ 채우고 라인 범위 입력 대기
+                        inp.value = text + "["
+                    inp.cursor_position = len(inp.value)
+                except Exception:
+                    pass
+                return
+
+            if not text.startswith("/") and (
+                not self._history or self._history[-1] != text
+            ):
                 self._history.append(text)
             self._history_index = -1
             self._history_draft = ""
@@ -393,7 +560,7 @@ class CommandBar(Widget):
                 self._close_help_panel()
             else:
                 return
-        candidates = _filter_candidates(event.value)
+        candidates = self._get_ac_candidates(event.value)
         if candidates:
             self._open_autocomplete(candidates, 0)
         else:
@@ -407,7 +574,9 @@ class CommandBar(Widget):
                 return
             text = event.value.strip()
             if text:
-                if not text.startswith("/") and (not self._history or self._history[-1] != text):
+                if not text.startswith("/") and (
+                    not self._history or self._history[-1] != text
+                ):
                     self._history.append(text)
                 self._history_index = -1
                 self._history_draft = ""
@@ -427,7 +596,9 @@ class CommandBar(Widget):
                 event.prevent_default()
             elif event.key == "down":
                 if self._ac_candidates:
-                    self._ac_index = min(len(self._ac_candidates) - 1, self._ac_index + 1)
+                    self._ac_index = min(
+                        len(self._ac_candidates) - 1, self._ac_index + 1
+                    )
                     self._render_autocomplete()
                 else:
                     self._history_next()

@@ -1,9 +1,13 @@
 """Command parsing for the tui_v2 command bar."""
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
-CommandKind = Literal["quiz", "grade", "review", "help", "commits", "answer", "exit", "repo", "apikey", "clear", "resume", "chat", "unknown"]
+CommandKind = Literal["quiz", "grade", "review", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "install-hook", "uninstall-hook", "chat", "unknown"]
+
+# @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태)
+_MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
 
 
 @dataclass(frozen=True)
@@ -11,6 +15,9 @@ class ParsedCommand:
     kind: CommandKind
     range_arg: str = ""  # "/quiz HEAD~3" -> "HEAD~3"
     raw: str = ""
+    mentioned_files: tuple = ()
+    # tuple of (file_path: str, start_line: int, end_line: int)
+    # end_line=0 means entire file
 
 
 def parse_command(text: str) -> ParsedCommand:
@@ -51,12 +58,23 @@ def parse_command(text: str) -> ParsedCommand:
     if text.startswith("/apikey"):
         parts = text.split(None, 1)
         return ParsedCommand(kind="apikey", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
+    if text.startswith("/model"):
+        parts = text.split(None, 1)
+        return ParsedCommand(kind="model", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
     if text in ("/exit", "/quit"):
         return ParsedCommand(kind="exit", raw=text)
     if text.startswith("/clear"):
         return ParsedCommand(kind="clear", raw=text)
     if text.startswith("/resume"):
         return ParsedCommand(kind="resume", raw=text)
+    if text.startswith("/install-hook"):
+        return ParsedCommand(kind="install-hook", raw=text)
+    if text.startswith("/uninstall-hook"):
+        return ParsedCommand(kind="uninstall-hook", raw=text)
     if text and not text.startswith("/"):
-        return ParsedCommand(kind="chat", range_arg=text, raw=text)
+        mentions = tuple(
+            (m.group(1), int(m.group(2) or 0), int(m.group(3) or 0))
+            for m in _MENTION_RE.finditer(text)
+        )
+        return ParsedCommand(kind="chat", range_arg=text, raw=text, mentioned_files=mentions)
     return ParsedCommand(kind="unknown", raw=text)
