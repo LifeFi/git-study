@@ -187,14 +187,14 @@ class HistoryView(Widget):
              ╰───╯
         """
         t = Text()
-        t.append("        ○ ○\n", style="color(229)")
+        t.append("        ○ ○\n", style="color(229)")  # ⏺ ● ○
         t.append("       ○\n", style="color(229)")
         t.append("     ╭╯ ╰╮", style="color(245)")
         t.append("    ")
         t.append("git-study", style="bold white")
         t.append(f" v{v}\n", style="dim")
         t.append("    ▐", style="color(245)")
-        t.append("▒▒▒▒▒", style="color(214)")
+        t.append("█████", style="color(214)")  # ▒▒▒▒▒ ▓▓▓▓▓ █████
         t.append("▌", style="color(245)")
         t.append("   ")
         t.append("AI writes. But do you?\n", style="dim italic")
