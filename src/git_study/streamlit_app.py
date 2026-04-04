@@ -33,6 +33,7 @@ st.set_page_config(
     layout="wide",
 )
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 세션 초기화
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,8 +41,8 @@ def _init_state() -> None:
     defaults: dict = {
         "repo_root": "",
         "commits": [],
-        "oldest_sha": None,   # 범위의 오래된 끝
-        "newest_sha": None,   # 범위의 최신 끝
+        "oldest_sha": None,  # 범위의 오래된 끝
+        "newest_sha": None,  # 범위의 최신 끝
         "commit_context": {},
         "thread_id": str(uuid.uuid4()),
         "messages": [],
@@ -62,18 +63,22 @@ st.markdown(
     "아래 명령어로 설치 후 `git-study-v2`를 실행하면 됩니다."
 )
 
-with st.expander("🔧 uv 설치 (처음 한 번만)"):
-    st.markdown("**macOS / Linux**")
-    st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
-    st.markdown("**Windows (PowerShell)**")
-    st.code(
-        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
-        language="powershell",
-    )
+# with st.expander("🔧 uv 설치 (처음 한 번만)"):
+#     st.markdown("**macOS / Linux**")
+#     st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+#     st.markdown("**Windows (PowerShell)**")
+#     st.code(
+#         'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+#         language="powershell",
+#     )
 
-_tab_testpypi, _tab_pypi = st.tabs(["🧪 TestPyPI (최신 개발판)", "📦 PyPI (정식 — 예정)"])
+_tab_testpypi, _tab_pypi = st.tabs(
+    ["🧪 TestPyPI (최신 개발판)", "📦 PyPI (정식 — 예정)"]
+)
 with _tab_testpypi:
-    st.markdown("📄 [https://test.pypi.org/project/git-study/](https://test.pypi.org/project/git-study/)")
+    st.markdown(
+        "📄 [https://test.pypi.org/project/git-study/](https://test.pypi.org/project/git-study/)"
+    )
     st.markdown("**1. uv 설치** (처음 한 번만)")
     st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
     st.markdown("**2. git-study 설치**")
@@ -91,12 +96,11 @@ with _tab_pypi:
 st.code("git-study-v2", language="bash")
 
 with st.expander("⚙️ 필수 설정: OpenAI API 키"):
-    st.markdown(
-        "`git-study-v2` 실행 후 커맨드바에 아래 명령어를 입력하세요."
-    )
+    st.markdown("`git-study-v2` 실행 후 커맨드바에 아래 명령어를 입력하세요.")
     st.code("/apikey sk-...", language="bash")
 
 st.divider()
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 도우미 함수
@@ -116,7 +120,11 @@ def _load_commits(repo_root: str, limit: int = 30) -> list[dict]:
 
 def _build_context_range(repo_root: str, oldest_sha: str, newest_sha: str) -> dict:
     """단일 커밋 또는 범위 컨텍스트 빌드."""
-    from git_study.domain.repo_context import get_repo, build_commit_context, build_multi_commit_context
+    from git_study.domain.repo_context import (
+        get_repo,
+        build_commit_context,
+        build_multi_commit_context,
+    )
 
     repo = get_repo("local", local_repo_root=repo_root)
 
@@ -170,7 +178,9 @@ def _new_thread() -> None:
 # 사이드바
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.info("💡 이 웹 앱은 설치 안내용입니다. 채팅 기능은 로컬 실행 시 이용 가능합니다.")
+    st.info(
+        "💡 이 웹 앱은 설치 안내용입니다. 채팅 기능은 로컬 실행 시 이용 가능합니다."
+    )
     st.title("🗂️ Git Study")
 
     # ── 저장소 설정 ────────────────────────────────────────────────────────────
@@ -189,6 +199,7 @@ with st.sidebar:
         else:
             try:
                 from git import Repo
+
                 Repo(str(path), search_parent_directories=True)
                 st.session_state.repo_root = str(path)
                 st.session_state.oldest_sha = None
@@ -214,9 +225,7 @@ with st.sidebar:
         if commits:
             # (label → sha) 매핑, 리스트는 newest-first
             sha_list = [c["sha"] for c in commits]
-            label_list = [
-                f"{c['short_sha']}  {c['subject'][:42]}" for c in commits
-            ]
+            label_list = [f"{c['short_sha']}  {c['subject'][:42]}" for c in commits]
 
             def _sha_to_idx(sha: str | None) -> int:
                 if sha and sha in sha_list:
@@ -236,7 +245,9 @@ with st.sidebar:
 
             # 오래된 커밋 (시작) — 끝보다 오래된 것만 선택 가능
             newest_selected_idx = label_list.index(newest_label)
-            older_labels = label_list[newest_selected_idx:]  # newest-first이므로 이후가 더 오래됨
+            older_labels = label_list[
+                newest_selected_idx:
+            ]  # newest-first이므로 이후가 더 오래됨
             older_shas = sha_list[newest_selected_idx:]
 
             oldest_idx_in_older = 0
@@ -274,10 +285,20 @@ with st.sidebar:
     # ── 모델 설정 ──────────────────────────────────────────────────────────────
     st.divider()
     st.subheader("모델")
-    from git_study.settings import load_settings, save_settings, DEFAULT_MODEL, SUGGESTED_MODELS as _SM
+    from git_study.settings import (
+        load_settings,
+        save_settings,
+        DEFAULT_MODEL,
+        SUGGESTED_MODELS as _SM,
+    )
+
     _settings = load_settings()
     _current = _settings.get("model", DEFAULT_MODEL)
-    _idx = _SM.index(_current) if _current in _SM else (_SM.index(DEFAULT_MODEL) if DEFAULT_MODEL in _SM else 0)
+    _idx = (
+        _SM.index(_current)
+        if _current in _SM
+        else (_SM.index(DEFAULT_MODEL) if DEFAULT_MODEL in _SM else 0)
+    )
     _selected = st.selectbox("모델 선택", _SM, index=_idx, label_visibility="collapsed")
     if _selected != _current:
         save_settings(
@@ -381,7 +402,9 @@ if user_input:
             save_settings(
                 model=new_model,
                 openai_api_key_mode=settings.get("openai_api_key_mode", "session"),
-                openai_api_key_configured=settings.get("openai_api_key_configured", False),
+                openai_api_key_configured=settings.get(
+                    "openai_api_key_configured", False
+                ),
             )
             with st.chat_message("user"):
                 st.markdown(user_input)
@@ -432,11 +455,13 @@ if user_input:
                 elif etype == "tool_result":
                     with st.expander("🔧 도구 결과", expanded=False):
                         st.code(event["content"], language=None)
-                    st.session_state.messages.append({
-                        "role": "tool",
-                        "name": "",
-                        "content": event["content"],
-                    })
+                    st.session_state.messages.append(
+                        {
+                            "role": "tool",
+                            "name": "",
+                            "content": event["content"],
+                        }
+                    )
 
                 elif etype == "done":
                     full_response = event.get("full_content", full_response)
@@ -450,8 +475,10 @@ if user_input:
             st.error(f"스트리밍 오류: {e}")
 
     if full_response:
-        st.session_state.messages.append({
-            "role": "ai",
-            "content": full_response,
-            "meta": {"route_label": route_label},
-        })
+        st.session_state.messages.append(
+            {
+                "role": "ai",
+                "content": full_response,
+                "meta": {"route_label": route_label},
+            }
+        )
