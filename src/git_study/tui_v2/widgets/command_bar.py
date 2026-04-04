@@ -11,7 +11,7 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Input, Static
+from textual.widgets import Input, Static, TextArea
 
 from .app_status_bar import AppStatusBar
 
@@ -28,8 +28,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/repo", "저장소 전환 (URL 또는 경로)"),
     ("/apikey", "OpenAI API key 설정"),
     ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
-    ("/install-hook", "현재 저장소에 post-commit hook 설치 (예: /install-hook iterm2)"),
-    ("/uninstall-hook", "post-commit hook 제거"),
+    ("/hook", "post-commit hook 관리 — 스페이스로 on/off 선택"),
     ("/help", "도움말"),
     ("/exit", "종료 (quit, Ctrl+Q 가능)"),
 ]
@@ -62,6 +61,11 @@ _MAP_CANDIDATES: list[tuple[str, str]] = [
     ("/map --full --refresh", "전체 맵 캐시 무시 재생성"),
 ]
 
+_HOOK_CANDIDATES: list[tuple[str, str]] = [
+    ("/hook on", "post-commit hook 설치 (커밋 후 자동 퀴즈)"),
+    ("/hook off", "post-commit hook 제거"),
+]
+
 _MODEL_DESCRIPTIONS: dict[str, str] = {
     "gpt-5.4": "최신 플래그십",
     "gpt-5.4-pro": "고성능 플래그십",
@@ -81,6 +85,63 @@ _MODEL_DESCRIPTIONS: dict[str, str] = {
     "o3-mini": "수학·과학·코딩",
 }
 
+
+
+class CommandInput(TextArea):
+    """TextArea 기반 커맨드 입력창.
+
+    - Enter: 커맨드 제출
+    - Shift+Enter: 줄바꿈 (TextArea 기본 동작)
+    - Input 호환 API(value, cursor_position)를 래퍼 프로퍼티로 제공
+    - 한국어 IME 조합 시 Input과 달리 커서 글리치 없음
+    """
+
+    class Submitted(Message):
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    BINDINGS = [
+        Binding("enter", "submit_input", priority=True),
+        Binding("shift+enter", "newline", priority=True),
+    ]
+
+    _programmatic: bool = False
+
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, new_value: str) -> None:
+        self._programmatic = True
+        try:
+            self.load_text(new_value)
+            self.move_cursor((0, len(new_value)))
+        finally:
+            self._programmatic = False
+
+    @property
+    def cursor_position(self) -> int:
+        return self.cursor_location[1]
+
+    @cursor_position.setter
+    def cursor_position(self, position: int) -> None:
+        row, _ = self.cursor_location
+        self.move_cursor((row, position))
+
+    def action_submit_input(self) -> None:
+        """Enter 키: 줄바꿈 없이 제출."""
+        self.post_message(CommandInput.Submitted(self.text.rstrip("\n")))
+
+    def action_newline(self) -> None:
+        """Shift+Enter 키: 줄바꿈 삽입."""
+        self.insert("\n")
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """programmatic 변경 시 부모로 이벤트 전파 차단."""
+        if self._programmatic:
+            event.stop()
 
 
 def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
@@ -123,6 +184,12 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
 
     if lower == "/map" or lower.startswith("/map "):
         return list(_MAP_CANDIDATES)
+
+    if lower == "/hook" or lower.startswith("/hook "):
+        query = lower[len("/hook"):].strip()
+        if not query:
+            return list(_HOOK_CANDIDATES)
+        return [(cmd, desc) for cmd, desc in _HOOK_CANDIDATES if query in cmd[len("/hook "):].lower()]
 
     # /뒤의 쿼리를 명령어 + 설명 전체에서 부분 매칭 (대소문자 무시)
     query = lower[1:]  # leading "/" 제거
@@ -168,8 +235,8 @@ class CommandBar(Widget):
     }
 
     CommandBar #cb-input-row {
-        height: 2;
-        align: left middle;
+        height: auto;
+        align: left top;
         border-bottom: solid white 70%;
     }
 
@@ -183,7 +250,9 @@ class CommandBar(Widget):
 
     CommandBar #cb-input {
         width: 1fr;
-        height: 1;
+        height: auto;
+        min-height: 1;
+        max-height: 8;
         border: none;
         padding: 0;
         background: transparent;
@@ -280,7 +349,7 @@ class CommandBar(Widget):
             yield Static(self.status_text, id="cb-status")
         with Horizontal(id="cb-input-row"):
             yield Static("❯", id="cb-prompt")
-            yield Input(placeholder="", id="cb-input")
+            yield CommandInput(id="cb-input", show_line_numbers=False)
         yield AppStatusBar(id="app-status")
 
     # ------------------------------------------------------------------
@@ -400,13 +469,13 @@ class CommandBar(Widget):
             self.status_text = hint
 
     def get_current_answer(self) -> str:
-        return self.query_one("#cb-input", Input).value
+        return self.query_one("#cb-input", CommandInput).value
 
     def clear_input(self) -> None:
-        self.query_one("#cb-input", Input).value = ""
+        self.query_one("#cb-input", CommandInput).value = ""
 
     def focus_input(self) -> None:
-        self.query_one("#cb-input", Input).focus()
+        self.query_one("#cb-input", CommandInput).focus()
 
     def set_mention_files(self, paths: list[str]) -> None:
         """App이 현재 커밋 파일 목록을 주입. @-mention 자동완성에 사용."""
@@ -423,7 +492,7 @@ class CommandBar(Widget):
         else:
             mention_text = f"@{file_path}"
         try:
-            inp = self.query_one("#cb-input", Input)
+            inp = self.query_one("#cb-input", CommandInput)
             current = inp.value
             if current and not current.endswith(" "):
                 inp.value = current + " " + mention_text + " "
@@ -518,7 +587,7 @@ class CommandBar(Widget):
         if self._ac_candidates and 0 <= self._ac_index < len(self._ac_candidates):
             cmd, _ = self._ac_candidates[self._ac_index]
             self._close_autocomplete()
-            inp = self.query_one("#cb-input", Input)
+            inp = self.query_one("#cb-input", CommandInput)
             if cmd.startswith("@"):
                 inp.value = cmd if cmd.endswith("/") else cmd + "["
                 inp.cursor_position = len(inp.value)
@@ -579,7 +648,11 @@ class CommandBar(Widget):
             for i, (cmd, desc) in enumerate(lines):
                 pad = max(0, 25 - _display_width(cmd))
                 t.append(f"   {cmd}" + " " * pad, style="bold")
-                t.append(f" {desc}", style="dim")
+                if isinstance(desc, Text):
+                    t.append(" ")
+                    t.append_text(desc)
+                else:
+                    t.append(f" {desc}", style="dim")
                 if i < len(lines) - 1:
                     t.append("\n")
             self.app.query_one("#cb-ac-list", Static).update(t)
@@ -665,9 +738,9 @@ class CommandBar(Widget):
             # @ 멘션 선택
             if text.startswith("@"):
                 try:
-                    inp = self.query_one("#cb-input", Input)
+                    inp = self.query_one("#cb-input", CommandInput)
                     if text.endswith("/"):
-                        # 폴더 선택: @dir/ 채우고 on_input_changed가 자동완성 재트리거
+                        # 폴더 선택: @dir/ 채우고 on_command_input_changed가 자동완성 재트리거
                         inp.value = text
                     else:
                         # 파일 선택: @file.py[ 채우고 라인 범위 입력 대기
@@ -683,14 +756,14 @@ class CommandBar(Widget):
                 self._history.append(text)
             self._history_index = -1
             self._history_draft = ""
-            self.query_one("#cb-input", Input).value = ""
+            self.query_one("#cb-input", CommandInput).value = ""
             self.post_message(self.CommandSubmitted(text))
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
-    def on_input_blur(self, event) -> None:
+    def on_command_input_blur(self, event) -> None:
         """#cb-input 포커스 이탈 시, 합법적인 대상이 아니면 복구."""
 
         def _restore_if_needed() -> None:
@@ -708,19 +781,22 @@ class CommandBar(Widget):
 
         self.call_after_refresh(_restore_if_needed)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id != "cb-input":
+            return
+        value = event.text_area.text
         if self._showing_help:
-            if event.value:
+            if value:
                 self._close_help_panel()
             else:
                 return
-        candidates = self._get_ac_candidates(event.value)
+        candidates = self._get_ac_candidates(value)
         if candidates:
             self._open_autocomplete(candidates, 0)
         else:
             self._close_autocomplete()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_command_input_submitted(self, event: CommandInput.Submitted) -> None:
         if self._ac_candidates:
             self._ac_select()
             event.stop()
@@ -777,7 +853,7 @@ class CommandBar(Widget):
     def _history_prev(self) -> None:
         if not self._history:
             return
-        inp = self.query_one("#cb-input", Input)
+        inp = self.query_one("#cb-input", CommandInput)
         if self._history_index == -1:
             self._history_draft = inp.value
             self._history_index = len(self._history) - 1
@@ -789,7 +865,7 @@ class CommandBar(Widget):
     def _history_next(self) -> None:
         if self._history_index == -1:
             return
-        inp = self.query_one("#cb-input", Input)
+        inp = self.query_one("#cb-input", CommandInput)
         if self._history_index < len(self._history) - 1:
             self._history_index += 1
             inp.value = self._history[self._history_index]

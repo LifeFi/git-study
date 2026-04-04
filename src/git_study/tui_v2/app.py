@@ -505,7 +505,7 @@ class GitStudyAppV2(App):
             hook_hint = (
                 "  ⚓ hook 등록됨."
                 if hook_installed
-                else "  /install-hook 으로 커밋 후 자동 퀴즈 설정."
+                else "  /hook on 으로 커밋 후 자동 퀴즈 설정."
             )
             self._set_status(f"저장소 로드 완료 ({len(commits)} commits).{hook_hint}")
             # show_range → _populate_tree가 위젯 마운트로 포커스를 steal했을 수 있으므로 복구
@@ -602,10 +602,11 @@ class GitStudyAppV2(App):
                 self._handle_clear()
             case "resume":
                 self._handle_resume()
-            case "install-hook":
-                self._handle_install_hook(cmd.range_arg)
-            case "uninstall-hook":
-                self._handle_uninstall_hook()
+            case "hook":
+                if cmd.range_arg == "off":
+                    self._handle_uninstall_hook()
+                else:
+                    self._handle_install_hook(cmd.range_arg if cmd.range_arg != "on" else "")
             case _:
                 self._set_status_timed(f"알 수 없는 명령: {cmd.raw}", 5.0)
                 self._append_result(f"알 수 없는 명령: {cmd.raw}", "error")
@@ -649,6 +650,10 @@ class GitStudyAppV2(App):
         self, event: InlineQuizBlock.AnswerEscaped
     ) -> None:
         self._set_mode("idle")
+        try:
+            self.query_one("#code-view", InlineCodeView)._refresh_quiz_blocks_state()
+        except Exception:
+            pass
         if self._questions:
             total = len(self._questions)
             answered = len(self._answers)
@@ -713,9 +718,9 @@ class GitStudyAppV2(App):
             # focus() 후 Textual이 커서를 리셋할 수 있으므로 한 번 더 고정
             def _fix_cursor():
                 try:
-                    from textual.widgets import Input
+                    from .widgets.command_bar import CommandInput
 
-                    inp = cmd_bar.query_one("#cb-input", Input)
+                    inp = cmd_bar.query_one("#cb-input", CommandInput)
                     inp.cursor_position = len(inp.value)
                 except Exception:
                     pass
@@ -732,6 +737,13 @@ class GitStudyAppV2(App):
         iqb-input(퀴즈 답변창)과 모달은 위젯 자체 ESC가 먼저 처리하므로 여기엔 도달 안 함."""
         if len(self.screen_stack) > 1:
             return  # 모달 열려있으면 패스
+        if self._mode == "quiz_answering":
+            # 채점 완료 블록(code-scroll 포커스)에서 ESC → 모드 해제 + 블록 비활성화
+            self._set_mode("idle")
+            try:
+                self.query_one("#code-view", InlineCodeView)._refresh_quiz_blocks_state()
+            except Exception:
+                pass
         try:
             self.query_one("#cmd-bar", CommandBar).focus_input()
         except Exception:
@@ -741,20 +753,18 @@ class GitStudyAppV2(App):
         if not self._questions:
             return
         focused = self.focused
-        if focused is not None and focused.has_class("iqb-input"):
-            # 퀴즈 블록 안에 있을 때만 이전 문제로 이동
+        in_quiz = (focused is not None and focused.has_class("iqb-input")) or self._mode == "quiz_answering"
+        if in_quiz:
             self._current_q_index = (self._current_q_index - 1) % len(self._questions)
-        # 블록 밖이면 현재 번호 유지 → 현재 문제로 진입
         self._resume_answer_mode()
 
     def action_next_question(self) -> None:
         if not self._questions:
             return
         focused = self.focused
-        if focused is not None and focused.has_class("iqb-input"):
-            # 퀴즈 블록 안에 있을 때만 다음 문제로 이동
+        in_quiz = (focused is not None and focused.has_class("iqb-input")) or self._mode == "quiz_answering"
+        if in_quiz:
             self._current_q_index = (self._current_q_index + 1) % len(self._questions)
-        # 블록 밖이면 현재 번호 유지 → 현재 문제로 진입
         self._resume_answer_mode()
 
     def on_command_bar_prev_question(self, event: CommandBar.PrevQuestion) -> None:
@@ -782,7 +792,13 @@ class GitStudyAppV2(App):
             pass
         code_view = self.query_one("#code-view", InlineCodeView)
         code_view.activate_question(self._current_q_index)
-        self._update_answer_status()
+        q = self._questions[self._current_q_index]
+        qid = q.get("id", "")
+        grade_map = {g["id"]: g for g in self._grades}
+        if qid in grade_map:
+            self._set_status("[bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]")
+        else:
+            self._update_answer_status()
 
     # ------------------------------------------------------------------
     # Commit picker (Phase 1 & 2)
@@ -1751,6 +1767,25 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def _show_help(self) -> None:
+        from rich.text import Text as RichText
+
+        hook_installed = (
+            self._repo_source != "github"
+            and bool(self._local_repo_root)
+            and (self._local_repo_root / ".git" / "hooks" / "post-commit").exists()
+            and _has_hook(
+                (self._local_repo_root / ".git" / "hooks" / "post-commit").read_text()
+            )
+        )
+        hook_desc = RichText()
+        if hook_installed:
+            hook_desc.append("● ", style="green")
+            hook_desc.append("설치됨", style="dim green")
+            hook_desc.append("  /hook off 으로 제거", style="dim")
+        else:
+            hook_desc.append("○ ", style="dim")
+            hook_desc.append("post-commit hook 설치 (커밋 후 자동 퀴즈)", style="dim")
+
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.show_help_panel(
             [
@@ -1770,11 +1805,7 @@ class GitStudyAppV2(App):
                     "/model [이름]",
                     "모델 변경 (예: /model gpt-4o) · 인자 없으면 목록 표시",
                 ),
-                (
-                    "/install-hook",
-                    "현재 저장소에 post-commit hook 설치 (커밋 후 자동 퀴즈)",
-                ),
-                ("/uninstall-hook", "post-commit hook 제거"),
+                ("/hook on", hook_desc),
                 ("/help", "도움말"),
                 ("Shift+Tab", "채팅 뷰 ↔ 코드 뷰 전환"),
                 ("Ctrl+Q", "종료"),
@@ -2322,6 +2353,15 @@ class GitStudyAppV2(App):
             self._set_mode("idle")
             self._restore_answering_view()
         self._sync_quiz_alert()
+
+        # 세션 복원 후 포커스를 명령창으로 복구
+        # (load_inline_quiz가 TextArea 위젯을 마운트하며 포커스를 가져갈 수 있음)
+        try:
+            cmd_bar = self.query_one("#cmd-bar", CommandBar)
+            self.call_after_refresh(lambda: self.call_after_refresh(cmd_bar.focus_input))
+            self.set_timer(0.3, cmd_bar.focus_input)
+        except Exception:
+            pass
 
         return True
 
@@ -2998,6 +3038,10 @@ class GitStudyAppV2(App):
 
     def action_global_tab(self) -> None:
         """App-level Tab: code view → panel cycle (file-tree→code-scroll→cmd-bar), chat mode → scroll+focus cmd-bar."""
+        cmd_bar = self.query_one("#cmd-bar", CommandBar)
+        if cmd_bar._ac_candidates:
+            cmd_bar.action_tab_pressed()
+            return
         if self._is_code_view_active():
             focused = self.focused
             focused_id = getattr(focused, "id", None) if focused else None
@@ -3025,12 +3069,8 @@ class GitStudyAppV2(App):
             # 좌측 패널 → 우측 패널 (기본 focus_next)
             self.action_focus_next()
             return
-        # 챗 모드: 자동완성 열려 있으면 CommandBar에 위임, 아니면 스크롤+포커스
-        cmd_bar = self.query_one("#cmd-bar", CommandBar)
-        if cmd_bar._ac_candidates:
-            cmd_bar.action_tab_pressed()
-        else:
-            self.handle_tab_no_autocomplete()
+        # 챗 모드: 스크롤 끝 + 명령창 포커스
+        self.handle_tab_no_autocomplete()
 
     def handle_tab_no_autocomplete(self) -> None:
         """챗 모드 Tab: 히스토리 최하단 스크롤 + cmd-bar 포커스."""
@@ -3067,9 +3107,13 @@ class GitStudyAppV2(App):
         return True
 
     def action_chat_scroll_page_up(self) -> None:
+        if len(self.screen_stack) > 1:
+            return
         self._chat_scroll("scroll_page_up")
 
     def action_chat_scroll_page_down(self) -> None:
+        if len(self.screen_stack) > 1:
+            return
         self._chat_scroll("scroll_page_down")
 
     def _has_code_content(self) -> bool:
@@ -3087,6 +3131,12 @@ class GitStudyAppV2(App):
                 pass
             return
         if self._is_code_view_active():
+            if self._mode == "quiz_answering":
+                self._set_mode("idle")
+                try:
+                    self.query_one("#code-view", InlineCodeView)._refresh_quiz_blocks_state()
+                except Exception:
+                    pass
             self._show_chat_view()
         else:
             if self._has_code_content():
@@ -3551,8 +3601,8 @@ TUI 명령어 (앱 실행 후):
   /grade                채점
   /review [범위]        커밋 해설 보기
   /answer               답변 재진입
-  /install-hook         현재 저장소에 post-commit hook 설치
-  /uninstall-hook       post-commit hook 제거
+  /hook on              현재 저장소에 post-commit hook 설치
+  /hook off             post-commit hook 제거
   /repo [URL|경로]      저장소 전환
   /model [이름]         모델 변경
   /apikey [key]         OpenAI API key 설정
