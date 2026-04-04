@@ -53,6 +53,50 @@ def _init_state() -> None:
 
 _init_state()
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 설치 안내 배너
+# ──────────────────────────────────────────────────────────────────────────────
+st.title("🗂️ Git Study — AI 기반 Git 커밋 학습 도구")
+st.markdown(
+    "터미널 기반 TUI 앱으로 Git 커밋을 AI와 함께 학습하세요. "
+    "아래 명령어로 설치 후 `git-study-v2`를 실행하면 됩니다."
+)
+
+with st.expander("🔧 uv 설치 (처음 한 번만)"):
+    st.markdown("**macOS / Linux**")
+    st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+    st.markdown("**Windows (PowerShell)**")
+    st.code(
+        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        language="powershell",
+    )
+
+_tab_testpypi, _tab_pypi = st.tabs(["🧪 TestPyPI (최신 개발판)", "📦 PyPI (정식 — 예정)"])
+with _tab_testpypi:
+    st.markdown("📄 [https://test.pypi.org/project/git-study/](https://test.pypi.org/project/git-study/)")
+    st.markdown("**1. uv 설치** (처음 한 번만)")
+    st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+    st.markdown("**2. git-study 설치**")
+    st.code(
+        "uv tool install --index-url https://test.pypi.org/simple/"
+        " --extra-index-url https://pypi.org/simple/ git-study",
+        language="bash",
+    )
+with _tab_pypi:
+    st.markdown("**1. uv 설치** (처음 한 번만)")
+    st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+    st.markdown("**2. git-study 설치**")
+    st.code("uv tool install git-study", language="bash")
+
+st.code("git-study-v2", language="bash")
+
+with st.expander("⚙️ 필수 설정: OpenAI API 키"):
+    st.markdown(
+        "`git-study-v2` 실행 후 커맨드바에 아래 명령어를 입력하세요."
+    )
+    st.code("/apikey sk-...", language="bash")
+
+st.divider()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 도우미 함수
@@ -126,6 +170,7 @@ def _new_thread() -> None:
 # 사이드바
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.info("💡 이 웹 앱은 설치 안내용입니다. 채팅 기능은 로컬 실행 시 이용 가능합니다.")
     st.title("🗂️ Git Study")
 
     # ── 저장소 설정 ────────────────────────────────────────────────────────────
