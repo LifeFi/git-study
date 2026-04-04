@@ -224,7 +224,7 @@ class CommandBar(Widget):
         height: 1;
         margin: 0 0 0 1;
         padding: 0 1;
-        background: rgb(160,50,0);
+        background: rgb(30,160,60);
         color: white;
         content-align: left middle;
         display: none;
@@ -298,9 +298,9 @@ class CommandBar(Widget):
     _DEFAULT_HINT: str = "명령어를 입력하세요: /quiz, /grade, /help"
     _ALERT_SPINNER: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _ALERT_COLORS: list[str] = [
-        "rgb(160,20,20)",
-        "rgb(120,0,110)",
-        "rgb(100,55,0)",
+        "rgb(30,160,60)",
+        "rgb(180,100,0)",
+        "rgb(0,120,160)",
     ]
 
     # ------------------------------------------------------------------

@@ -548,6 +548,9 @@ class GitStudyAppV2(App):
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
                 )
+                # 범위가 명시된 경우 메인 스레드에서 즉시 SHA 업데이트 (race condition 방지)
+                if cmd.range_arg:
+                    self._pre_apply_range(cmd.range_arg)
                 self._start_quiz(
                     cmd.range_arg,
                     log_block_id=log_block_id,
@@ -559,6 +562,9 @@ class GitStudyAppV2(App):
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
                 )
+                # 범위가 명시된 경우 메인 스레드에서 즉시 SHA 업데이트 (race condition 방지)
+                if cmd.range_arg:
+                    self._pre_apply_range(cmd.range_arg)
                 self._start_review(
                     cmd.range_arg,
                     log_block_id=log_block_id,
@@ -1246,6 +1252,7 @@ class GitStudyAppV2(App):
 
         self._oldest_sha = oldest_sha
         self._newest_sha = newest_sha
+        self.call_from_thread(self._show_range_in_view, oldest_sha, newest_sha)
         self.call_from_thread(self._sync_commit_selection, oldest_sha, newest_sha)
 
         try:
@@ -2123,6 +2130,19 @@ class GitStudyAppV2(App):
                 return head.parents[0].hexsha, head.hexsha
             return head.hexsha, head.hexsha
 
+        # Support "SHA1..SHA2" format (order doesn't matter) — ".." 체크를 먼저
+        # "HEAD~1..HEAD~4" 같은 입력이 HEAD~ 분기에 잘못 걸리지 않도록
+        if ".." in range_arg:
+            parts = range_arg.split("..", 1)
+            c1 = repo.commit(parts[0].strip())
+            c2 = repo.commit(parts[1].strip())
+            try:
+                # exits 0 if c1 is ancestor of c2 (= c1 is older)
+                repo.git.merge_base("--is-ancestor", c1.hexsha, c2.hexsha)
+                return c1.hexsha, c2.hexsha
+            except Exception:
+                return c2.hexsha, c1.hexsha
+
         # Support "HEAD~N" format -> range from HEAD~N to HEAD
         if range_arg.startswith("HEAD~"):
             try:
@@ -2137,18 +2157,6 @@ class GitStudyAppV2(App):
                 else:
                     break
             return oldest.hexsha, head.hexsha
-
-        # Support "SHA1..SHA2" format (order doesn't matter)
-        if ".." in range_arg:
-            parts = range_arg.split("..", 1)
-            c1 = repo.commit(parts[0].strip())
-            c2 = repo.commit(parts[1].strip())
-            try:
-                # exits 0 if c1 is ancestor of c2 (= c1 is older)
-                repo.git.merge_base("--is-ancestor", c1.hexsha, c2.hexsha)
-                return c1.hexsha, c2.hexsha
-            except Exception:
-                return c2.hexsha, c1.hexsha
 
         # Single SHA
         commit = repo.commit(range_arg.strip())
@@ -2170,6 +2178,22 @@ class GitStudyAppV2(App):
                 break
             current = current.parents[0]
         return shas
+
+    def _pre_apply_range(self, range_arg: str) -> None:
+        """메인 스레드에서 즉시 SHA 범위를 설정한다 (race condition 방지).
+
+        백그라운드 워커가 _resolve_range를 호출하기 전에 커밋 피커가 열려도
+        올바른 S/E 마커가 표시되도록 미리 상태를 업데이트한다.
+        코드뷰 갱신(_show_range_in_view)은 git I/O가 무거우므로 워커에 위임하고,
+        여기서는 SHA + 선택 동기화만 수행한다.
+        """
+        try:
+            oldest_sha, newest_sha = self._resolve_range(range_arg)
+        except Exception:
+            return  # 실패 시 워커가 다시 시도하며 오류를 표시함
+        self._oldest_sha = oldest_sha
+        self._newest_sha = newest_sha
+        self._sync_commit_selection(oldest_sha, newest_sha)
 
     # ------------------------------------------------------------------
     # Phase 2: Persist app state (selected SHA range)
@@ -3206,6 +3230,12 @@ class GitStudyAppV2(App):
             focused = self.focused
             in_answer_input = focused is not None and focused.has_class("iqb-input")
             if (
+                self._questions
+                and len(self._answers) >= len(self._questions)
+                and not self._grades
+            ):
+                cb.set_quiz_alert("답변 완료! /grade 로 채점하세요")
+            elif (
                 not in_answer_input
                 and self._mode != "quiz_answering"
                 and self._questions
