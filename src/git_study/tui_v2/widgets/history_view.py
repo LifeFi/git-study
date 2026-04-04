@@ -175,12 +175,36 @@ class HistoryView(Widget):
         with Vertical(id="hv-content"):
             yield Static(self._welcome_text(), classes="hv-welcome")
 
+    def _logo(self, v: str) -> Text:
+        """로고 블록 — 교체 시 이 메서드만 수정.
+
+        현재: amber 포션 + 방울 3개
+
+            ○  ○
+               ○
+             ╭╯ ╰╮    git-study vX.X
+            ▐▒▒▒▒▒▌   AI writes. But do you?
+             ╰───╯
+        """
+        t = Text()
+        t.append("        ○ ○\n", style="color(229)")
+        t.append("       ○\n", style="color(229)")
+        t.append("     ╭╯ ╰╮", style="color(245)")
+        t.append("    ")
+        t.append("git-study", style="bold white")
+        t.append(f" v{v}\n", style="dim")
+        t.append("    ▐", style="color(245)")
+        t.append("▒▒▒▒▒", style="color(214)")
+        t.append("▌", style="color(245)")
+        t.append("   ")
+        t.append("AI writes. But do you?\n", style="dim italic")
+        t.append("     ╰───╯\n", style="color(245)")
+        return t
+
     def _welcome_text(self) -> Text:
         v = _get_version()
         t = Text()
-        t.append("git-study", style="bold white")
-        t.append(f" v{v}\n", style="dim")
-        t.append("AI writes. But do you?\n", style="dim italic")
+        t.append_text(self._logo(v))
         t.append("\n")
         t.append("  Step 1  ", style="dim")
         t.append("/commits", style="bold cyan")
