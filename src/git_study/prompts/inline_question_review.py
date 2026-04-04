@@ -32,6 +32,7 @@ Review rules:
   or lines whose purpose is self-evident from their name) must be replaced.
   If more than 1 such trivial question exists, set is_valid=false.
 - Check whether the content obeys all hard constraints in the user request.
+- Check whether any question_type is duplicated across questions — duplicates must be flagged.
 - If valid, set is_valid to true.
 - If it needs revision, set is_valid to false and provide a compact revision_instruction in Korean.
 """.strip()

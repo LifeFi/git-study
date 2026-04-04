@@ -29,8 +29,6 @@ class AppStatusBar(Widget):
     AppStatusBar #asb-row {
         height: 1;
         padding: 0 1;
-        margin: 1 0;
-        background: $panel;
     }
 
     AppStatusBar #asb-line {

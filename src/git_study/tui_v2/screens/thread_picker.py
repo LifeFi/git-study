@@ -51,6 +51,10 @@ class ThreadPickerScreen(ModalScreen[dict | None]):
         text-align: center;
         padding-top: 1;
     }
+
+    ThreadPickerScreen #tp-list ListItem {
+        margin-bottom: 1;
+    }
     """
 
     def __init__(self, threads: list[dict], current_id: str) -> None:

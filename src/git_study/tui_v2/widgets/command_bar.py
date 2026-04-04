@@ -13,16 +13,14 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-# (command, description) — autocomplete candidates
+from .app_status_bar import AppStatusBar
+
+# (command, description) — autocomplete candidates (인자 있는 변형은 포함하지 않음)
 _COMMANDS: list[tuple[str, str]] = [
     ("/commits", "커밋 범위 선택"),
-    ("/quiz", "퀴즈 생성 (현재 범위)"),
-    ("/quiz HEAD", "HEAD 커밋 퀴즈"),
-    ("/quiz HEAD~3", "최근 4개 커밋 퀴즈"),
-    ("/quiz HEAD~1..HEAD~4", "범위 지정 퀴즈"),
-    ("/review", "커밋 해설 보기 (현재 범위)"),
-    ("/review HEAD", "HEAD 커밋 해설"),
-    ("/review HEAD~3", "최근 4개 커밋 해설"),
+    ("/quiz", "퀴즈 생성 — 범위·개수·저자 옵션 지원 (스페이스로 목록)"),
+    ("/review", "커밋 해설 — /review 뒤에 스페이스로 범위 목록"),
+    ("/map", "파일 구조·역할 맵 — /map 뒤에 스페이스로 옵션"),
     ("/grade", "채점"),
     ("/answer", "답변 재진입"),
     ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
@@ -34,6 +32,34 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/uninstall-hook", "post-commit hook 제거"),
     ("/help", "도움말"),
     ("/exit", "종료 (quit, Ctrl+Q 가능)"),
+]
+
+_QUIZ_CANDIDATES: list[tuple[str, str]] = [
+    ("/quiz", "현재 선택된 커밋 범위로 퀴즈 생성"),
+    ("/quiz 5", "질문 5개 생성 (기본 3개)"),
+    ("/quiz --ai", "AI 생성 코드 모드 (취약점·테스트·성능 집중)"),
+    ("/quiz --others", "타인 코드 모드 (의도·동작·아키텍처 집중)"),
+    ("/quiz HEAD", "HEAD 커밋 1개"),
+    ("/quiz HEAD~3", "최근 4개 커밋"),
+    ("/quiz HEAD~1..HEAD~4", "범위 직접 지정"),
+    ("/quiz HEAD~3 --ai 6", "범위 + 저자 옵션 + 개수 조합"),
+]
+
+_REVIEW_CANDIDATES: list[tuple[str, str]] = [
+    ("/review HEAD", "HEAD 커밋 1개"),
+    ("/review HEAD~3", "최근 4개 커밋"),
+]
+
+_REPO_CANDIDATES: list[tuple[str, str]] = [
+    ("/repo", "저장소 선택 창 열기"),
+    ("/repo <경로 또는 URL>", "신규 저장소 추가 / 전환"),
+]
+
+_MAP_CANDIDATES: list[tuple[str, str]] = [
+    ("/map", "현재 커밋 범위 — 변경 파일 역할 맵"),
+    ("/map --full", "전체 프로젝트 — 폴더 구조 + 핵심 파일"),
+    ("/map --refresh", "캐시 무시하고 재생성"),
+    ("/map --full --refresh", "전체 맵 캐시 무시 재생성"),
 ]
 
 _MODEL_DESCRIPTIONS: dict[str, str] = {
@@ -54,6 +80,7 @@ _MODEL_DESCRIPTIONS: dict[str, str] = {
     "o3-pro": "고성능 추론 강화",
     "o3-mini": "수학·과학·코딩",
 }
+
 
 
 def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
@@ -79,6 +106,24 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
                 results.append((f"/model {model}", desc))
         return results
 
+    if lower == "/quiz" or lower.startswith("/quiz "):
+        query = lower[len("/quiz") :].strip()
+        if not query:
+            return [("/quiz", "퀴즈 생성 (현재 범위)"), *_QUIZ_CANDIDATES]
+        return [(cmd, desc) for cmd, desc in _QUIZ_CANDIDATES if query in cmd.lower()]
+
+    if lower == "/review" or lower.startswith("/review "):
+        query = lower[len("/review") :].strip()
+        if not query:
+            return [("/review", "커밋 해설 보기 (현재 범위)"), *_REVIEW_CANDIDATES]
+        return [(cmd, desc) for cmd, desc in _REVIEW_CANDIDATES if query in cmd.lower()]
+
+    if lower == "/repo" or lower.startswith("/repo "):
+        return list(_REPO_CANDIDATES)
+
+    if lower == "/map" or lower.startswith("/map "):
+        return list(_MAP_CANDIDATES)
+
     # /뒤의 쿼리를 명령어 + 설명 전체에서 부분 매칭 (대소문자 무시)
     query = lower[1:]  # leading "/" 제거
     return [
@@ -99,19 +144,32 @@ class CommandBar(Widget):
         layout: vertical;
     }
 
-    CommandBar #cb-status {
-        height: 1;
-        width: 1fr;
-        padding: 0 1;
-        color: $text-muted;
-        background: $panel;
+    CommandBar #cb-status-row {
+        height: 3;
+        border-top: solid white 70%;
+    }
 
+    CommandBar #cb-alert {
+        width: auto;
+        height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        background: rgb(160,50,0);
+        color: white;
+        content-align: left middle;
+        display: none;
+    }
+
+    CommandBar #cb-status {
+        height: 3;
+        width: 1fr;
+        padding: 0 1 0 2;
+        color: $text-muted;
     }
 
     CommandBar #cb-input-row {
-        height: 3;
+        height: 2;
         align: left middle;
-        border-top: solid white 70%;
         border-bottom: solid white 70%;
     }
 
@@ -166,6 +224,12 @@ class CommandBar(Widget):
         pass
 
     _DEFAULT_HINT: str = "명령어를 입력하세요: /quiz, /grade, /help"
+    _ALERT_SPINNER: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _ALERT_COLORS: list[str] = [
+        "rgb(160,20,20)",
+        "rgb(120,0,110)",
+        "rgb(100,55,0)",
+    ]
 
     # ------------------------------------------------------------------
     # Reactive state
@@ -200,16 +264,24 @@ class CommandBar(Widget):
         self._mention_files = []
         self._mention_changed_files = set()
         self._status_timer: Timer | None = None
+        self._context_hint: str = self._DEFAULT_HINT
+        self._dismissable: bool = False
+        self._alert_timer: Timer | None = None
+        self._alert_step: int = 0
+        self._alert_text: str = ""
 
     # ------------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Static(self.status_text, id="cb-status")
+        with Horizontal(id="cb-status-row"):
+            yield Static("", id="cb-alert")
+            yield Static(self.status_text, id="cb-status")
         with Horizontal(id="cb-input-row"):
             yield Static("❯", id="cb-prompt")
             yield Input(placeholder="", id="cb-input")
+        yield AppStatusBar(id="app-status")
 
     # ------------------------------------------------------------------
     # Watchers
@@ -230,12 +302,102 @@ class CommandBar(Widget):
         if self._status_timer is not None:
             self._status_timer.stop()
             self._status_timer = None
+        self._dismissable = False
         self.status_text = text
         self._status_timer = self.set_timer(timeout, self._restore_default_hint)
 
+    def set_status_dismissable(self, text: str) -> None:
+        """ESC 키로 해제 가능한 지속 상태 메시지를 표시."""
+        if self._status_timer is not None:
+            self._status_timer.stop()
+            self._status_timer = None
+        self._dismissable = True
+        self.status_text = text
+        self._context_hint = self._DEFAULT_HINT
+
+    def set_quiz_alert(self, text: str) -> None:
+        """알림 영역에 스피너+색상 애니메이션과 함께 텍스트를 표시."""
+        self._alert_text = text
+        try:
+            self.query_one("#cb-alert", Static).display = True
+        except Exception:
+            pass
+        if self._alert_timer is None:
+            self._alert_step = 0
+            self._alert_timer = self.set_interval(0.1, self._step_alert)
+
+    def clear_quiz_alert(self) -> None:
+        """알림 영역 숨김 및 애니메이션 정지."""
+        if self._alert_timer is not None:
+            self._alert_timer.stop()
+            self._alert_timer = None
+        self._alert_text = ""
+        try:
+            w = self.query_one("#cb-alert", Static)
+            w.update("")
+            w.display = False
+            w.styles.background = self._ALERT_COLORS[0]
+        except Exception:
+            pass
+
+    def _step_alert(self) -> None:
+        """타이머 콜백 — 스피너 프레임 + 배경색 순환."""
+        try:
+            w = self.query_one("#cb-alert", Static)
+            spinner = self._ALERT_SPINNER[self._alert_step % len(self._ALERT_SPINNER)]
+            w.update(f"{spinner} {self._alert_text}")
+            color = self._ALERT_COLORS[(self._alert_step // 10) % len(self._ALERT_COLORS)]
+            w.styles.background = color
+            self._alert_step += 1
+        except Exception:
+            pass
+
     def _restore_default_hint(self) -> None:
         self._status_timer = None
-        self.status_text = self._DEFAULT_HINT
+        self.status_text = self._context_hint
+
+    def update_context_hint(
+        self,
+        zone: str,
+        quiz_count: int = 0,
+        answered_count: int = 0,
+    ) -> None:
+        """포커스 존과 퀴즈 상태에 따라 컨텍스트 힌트를 갱신한다.
+
+        zone: "left_panel" | "right_panel" | "command_bar_chat" |
+              "command_bar_code" | "focus_lost"
+        타이머로 표시 중인 임시 메시지가 있으면 _context_hint만 갱신하고
+        실제 status_text는 타이머 만료 후 자동 반영된다.
+        """
+        has_quiz = quiz_count > 0
+        quiz_incomplete = has_quiz and answered_count < quiz_count
+
+        if zone == "left_panel":
+            hint = "📂 파일 트리 — Tab: 코드뷰  │  Shift+Tab: 채팅"
+            if has_quiz:
+                hint += "  │  Shift+↑↓: 문제 이동"
+        elif zone == "right_panel":
+            hint = "💻 코드뷰 — Tab: 명령창  │  Shift+Tab: 채팅"
+            if has_quiz:
+                hint += "  │  Shift+↑↓: 문제 이동"
+        elif zone == "focus_lost":
+            hint = "Tab → 명령창으로 이동"
+            if has_quiz:
+                hint += "  │  Shift+↑↓: 문제 이동"
+        elif zone == "command_bar_chat":
+            if has_quiz:
+                hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
+            else:
+                hint = self._DEFAULT_HINT
+        else:  # command_bar_code
+            if has_quiz:
+                hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
+            else:
+                hint = self._DEFAULT_HINT
+
+        self._context_hint = hint
+        if self._status_timer is None:
+            self.status_text = hint
 
     def get_current_answer(self) -> str:
         return self.query_one("#cb-input", Input).value
@@ -383,6 +545,7 @@ class CommandBar(Widget):
             ac.display = True
             self.app.query_one("#mode-bar").display = False
             self.app.query_one("#content-spacer").display = False
+            self.query_one("#app-status").display = False
             self.app.query_one("#scroll-wrapper").scroll_end(animate=False)
         except Exception:
             pass
@@ -396,6 +559,7 @@ class CommandBar(Widget):
             ac.display = False
             self.app.query_one("#mode-bar").display = True
             self.app.query_one("#content-spacer").display = True
+            self.query_one("#app-status").display = True
         except Exception:
             pass
 
@@ -423,6 +587,7 @@ class CommandBar(Widget):
             ac.styles.height = "auto"
             ac.display = True
             self.app.query_one("#mode-bar").display = False
+            self.query_one("#app-status").display = False
             self.app.query_one("#scroll-wrapper").scroll_end(animate=False)
         except Exception:
             pass
@@ -435,6 +600,7 @@ class CommandBar(Widget):
             ac.display = False
             self.app.query_one("#mode-bar").display = True
             self.app.query_one("#content-spacer").display = True
+            self.query_one("#app-status").display = True
         except Exception:
             pass
 
@@ -591,6 +757,12 @@ class CommandBar(Widget):
         elif event.key == "escape":
             if self._showing_help:
                 self._close_help_panel()
+                event.stop()
+                event.prevent_default()
+            elif self._dismissable:
+                self._dismissable = False
+                self.status_text = self._DEFAULT_HINT
+                self._context_hint = self._DEFAULT_HINT
                 event.stop()
                 event.prevent_default()
             elif self._ac_candidates:

@@ -151,7 +151,7 @@ def route_after_read_review(state: ReadGraphState) -> str:
     review = state.get("reading_review", {})
     if review.get("is_valid", True):
         return "finalize"
-    if int(state.get("repair_attempts", 0)) >= 1:
+    if int(state.get("repair_attempts", 0)) >= 2:
         return "finalize"
     return "repair"
 

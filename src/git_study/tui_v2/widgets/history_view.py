@@ -153,7 +153,6 @@ class HistoryView(Widget):
         padding: 0 1;
         background: $boost;
         color: $text;
-        margin-bottom: 1;
     }
 
     HistoryView .hv-assistant-streaming {
@@ -165,6 +164,10 @@ class HistoryView(Widget):
         height: 1;
         padding: 0 3;
         color: $text-disabled;
+    }
+
+    HistoryView .hv-token-usage {
+        margin-bottom: 1;
     }
     """
 
@@ -216,7 +219,7 @@ class HistoryView(Widget):
         return block
 
     def append_result(
-        self, text: str, style: str = "info", block: Vertical | None = None
+        self, text: "str | Text", style: str = "info", block: Vertical | None = None
     ) -> None:
         """Append a result row (└ text) under the last command block or given block."""
         if block is None:
@@ -226,7 +229,10 @@ class HistoryView(Widget):
             block = blocks[-1] if blocks else container
         result_text = Text()
         result_text.append(_RESULT_PREFIX, style="dim")
-        result_text.append(text)
+        if isinstance(text, Text):
+            result_text.append_text(text)
+        else:
+            result_text.append(text)
         result_row = Static(result_text, classes=f"hv-result-row -{style}")
         block.mount(result_row)
 
@@ -269,18 +275,13 @@ class HistoryView(Widget):
 
     def begin_streaming(self, block: Vertical) -> Static:
         """스트리밍 시작 — block에 plain text Static 추가 후 반환."""
-        block.mount(Static("", classes="hv-assistant-streaming"))
         streaming_widget = Static("▌", classes="hv-assistant-streaming")
         block.mount(streaming_widget)
         return streaming_widget
 
     def update_streaming(self, widget: Static, text: str) -> None:
-        """스트리밍 중 누적 텍스트를 plain text로 업데이트 (마크다운 파싱 생략).
-
-        매 청크마다 RichMarkdown을 파싱하면 위젯 높이가 두 번 계산되어
-        레이아웃이 덜컥거린다. 완료 시 end_streaming에서 마크다운으로 전환.
-        """
-        widget.update(Text(text + " ▌"))
+        """스트리밍 중 누적 텍스트를 마크다운으로 업데이트."""
+        widget.update(RichMarkdown(text + " ▌"))
 
     def end_streaming(self, block: Vertical, widget: Static, full_text: str) -> None:
         """스트리밍 완료 — 최종 마크다운 렌더링 (widget 교체 없이)."""
@@ -310,6 +311,45 @@ class HistoryView(Widget):
             row.remove()
         except Exception:
             pass
+
+    def append_rich(self, rich_text: Text, block: Vertical | None = None) -> None:
+        """Rich Text 객체를 직접 렌더링해 추가 (바 차트 등 커스텀 레이아웃용)."""
+        target = block or self.query_one("#hv-content", Vertical)
+        widget = Static(rich_text, classes="hv-result-row -info")
+        target.mount(widget)
+
+    def append_token_usage(
+        self,
+        block: Vertical | None,
+        input_tokens: int,
+        output_tokens: int,
+        insert_before: Widget | None = None,
+        model_name: str | None = None,
+    ) -> None:
+        """토큰 사용량을 한 줄로 표시 (LLM 호출 완료 후).
+
+        insert_before: 지정 시 해당 위젯 앞에 삽입 (chat에서 명령어 바로 아래 위치용).
+        """
+        t = Text()
+        if model_name:
+            t.append(f"  {model_name}", style="dim")
+            t.append("  ", style="dim")
+        else:
+            t.append("  ", style="dim")
+        t.append("↑ ", style="dim")
+        t.append(f"{input_tokens:,}", style="dim cyan")
+        t.append("  ↓ ", style="dim")
+        t.append(f"{output_tokens:,}", style="dim green")
+        t.append(" tokens", style="dim")
+        target = block or self.query_one("#hv-content", Vertical)
+        # 이전 토큰 행의 여백을 0으로 리셋 — 마지막 행만 아래 여백을 가짐 (CSS default=1)
+        for prev in target.query(".hv-token-usage"):
+            prev.styles.margin_bottom = 0
+        row = Static(t, classes="hv-token-usage hv-result-row -info")
+        if insert_before is not None:
+            target.mount(row, before=insert_before)
+        else:
+            target.mount(row)
 
     def clear(self) -> None:
         """Clear all history entries (keep welcome)."""

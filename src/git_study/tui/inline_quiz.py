@@ -45,6 +45,10 @@ QUESTION_TYPE_KO = {
     "behavior": "동작",
     "tradeoff": "트레이드오프",
     "vulnerability": "취약점/위험",
+    "test": "테스트 전략",
+    "performance": "성능/복잡도",
+    "architecture": "아키텍처 구조",
+    "improvement": "개선 제안",
 }
 
 

@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 from ..graphs.inline_grade_graph import inline_grade_graph
+from ..llm.token_tracker import stream_graph_with_usage
 from ..types import InlineQuizGrade, InlineQuizQuestion
 
 
@@ -16,32 +17,19 @@ def stream_inline_grade_progress(
     questions: list[InlineQuizQuestion],
     answers: dict[str, str],
     user_request: str = "",
+    model_override: str = "",
 ) -> Iterator[dict]:
-    merged_result: dict = {}
-    seen_nodes: set[str] = set()
-
-    for chunk in inline_grade_graph.stream(
+    yield from stream_graph_with_usage(
+        inline_grade_graph,
         {
             "questions": questions,
             "answers": answers,
             "user_request": user_request,
         },
-        stream_mode="updates",
-    ):
-        if not isinstance(chunk, dict):
-            continue
-        for node_name, update in chunk.items():
-            if node_name not in seen_nodes:
-                seen_nodes.add(node_name)
-                yield {
-                    "type": "node",
-                    "node": node_name,
-                    "label": INLINE_GRADE_NODE_LABELS.get(node_name, node_name),
-                }
-            if isinstance(update, dict):
-                merged_result.update(update)
-
-    yield {"type": "result", "result": merged_result}
+        INLINE_GRADE_NODE_LABELS,
+        deduplicate_nodes=True,
+        model_override=model_override,
+    )
 
 
 def generate_inline_quiz_grades(

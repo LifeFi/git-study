@@ -4,13 +4,14 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-CommandKind = Literal["quiz", "grade", "review", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "install-hook", "uninstall-hook", "chat", "unknown"]
+CommandKind = Literal["quiz", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "install-hook", "uninstall-hook", "chat", "unknown"]
 
 # @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태)
 _MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
+_MODEL_RE = re.compile(r'--model(?:=|\s+)(\S+)')
 
 
-QUIZ_COUNT_DEFAULT = 4
+QUIZ_COUNT_DEFAULT = 3
 QUIZ_COUNT_MIN = 1
 QUIZ_COUNT_MAX = 10
 
@@ -24,6 +25,10 @@ class ParsedCommand:
     # tuple of (file_path: str, start_line: int, end_line: int)
     # end_line=0 means entire file
     quiz_count: int = QUIZ_COUNT_DEFAULT
+    author_context: str = "self"  # "self" | "others" | "ai"
+    refresh: bool = False
+    full_map: bool = False
+    model_override: str = ""  # --model=xxx 로 지정된 일회성 모델
 
 
 def parse_command(text: str) -> ParsedCommand:
@@ -39,30 +44,53 @@ def parse_command(text: str) -> ParsedCommand:
     if text in ("?", "/help"):
         return ParsedCommand(kind="help", raw=text)
     if text.startswith("/review"):
-        parts = text.split(None, 1)
+        m = _MODEL_RE.search(text)
+        arg = _MODEL_RE.sub("", text[len("/review"):]).strip() if m else text[len("/review"):].strip()
         return ParsedCommand(
             kind="review",
-            range_arg=parts[1] if len(parts) > 1 else "",
+            range_arg=arg,
             raw=text,
+            model_override=m.group(1) if m else "",
         )
     if text.startswith("/quiz"):
         parts = text.split(None, 1)
         arg = parts[1] if len(parts) > 1 else ""
         quiz_count = QUIZ_COUNT_DEFAULT
+        author_context = "self"
         range_arg = arg
+        model_override = ""
         if arg:
+            m = _MODEL_RE.search(arg)
+            if m:
+                model_override = m.group(1)
+                arg = _MODEL_RE.sub("", arg).strip()
             tokens = arg.split()
-            if tokens[-1].isdigit():
+            if "--ai" in tokens:
+                author_context = "ai"
+                tokens = [t for t in tokens if t != "--ai"]
+            elif "--others" in tokens:
+                author_context = "others"
+                tokens = [t for t in tokens if t != "--others"]
+            if tokens and tokens[-1].isdigit():
                 quiz_count = max(QUIZ_COUNT_MIN, min(int(tokens[-1]), QUIZ_COUNT_MAX))
-                range_arg = " ".join(tokens[:-1])
+                tokens = tokens[:-1]
+            range_arg = " ".join(tokens)
         return ParsedCommand(
             kind="quiz",
             range_arg=range_arg,
             raw=text,
             quiz_count=quiz_count,
+            author_context=author_context,
+            model_override=model_override,
         )
+    if text.startswith("/map"):
+        refresh = "--refresh" in text
+        full_map = "--full" in text
+        m = _MODEL_RE.search(text)
+        return ParsedCommand(kind="map", raw=text, refresh=refresh, full_map=full_map, model_override=m.group(1) if m else "")
     if text.startswith("/grade"):
-        return ParsedCommand(kind="grade", raw=text)
+        m = _MODEL_RE.search(text)
+        return ParsedCommand(kind="grade", raw=text, model_override=m.group(1) if m else "")
     if text.startswith("/commits"):
         return ParsedCommand(kind="commits", raw=text)
     if text.startswith("/answer"):

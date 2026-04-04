@@ -104,6 +104,8 @@ def stream_chat(
 
                 full_content = ""
                 route_emitted = False
+                input_tokens = 0
+                output_tokens = 0
 
                 # stream_mode 리스트 사용 시 모든 이벤트가 (mode, data) 튜플로 옴
                 for mode, data in app.stream(
@@ -137,12 +139,21 @@ def stream_chat(
                                 full_content += str(chunk.content)
                                 yielded_any = True
                                 yield {"type": "token", "content": str(chunk.content)}
+                            # 마지막 청크에 usage_metadata가 포함됨
+                            if chunk.usage_metadata:
+                                um = chunk.usage_metadata
+                                input_tokens = um.get("input_tokens", 0)
+                                output_tokens = um.get("output_tokens", 0)
                         elif isinstance(chunk, AIMessage):
                             # 비스트리밍 폴백: AIMessage로 텍스트가 통째로 온 경우
                             if chunk.content and not full_content:
                                 full_content += str(chunk.content)
                                 yielded_any = True
                                 yield {"type": "token", "content": str(chunk.content)}
+                            if chunk.usage_metadata:
+                                um = chunk.usage_metadata
+                                input_tokens = um.get("input_tokens", 0)
+                                output_tokens = um.get("output_tokens", 0)
                             for tc in (chunk.tool_calls or []):
                                 yielded_any = True
                                 yield {
@@ -153,7 +164,12 @@ def stream_chat(
                         elif isinstance(chunk, ToolMessage):
                             yield {"type": "tool_result", "content": str(chunk.content)}
 
-                yield {"type": "done", "full_content": full_content}
+                yield {
+                    "type": "done",
+                    "full_content": full_content,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                }
                 return
 
         except Exception as exc:

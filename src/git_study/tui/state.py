@@ -536,6 +536,46 @@ def list_learning_sessions(
     return entries
 
 
+def get_map_cache_path(
+    session_id: str,
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> Path:
+    return (
+        get_runtime_dir(repo_source=repo_source, local_repo_root=local_repo_root)
+        / "maps"
+        / f"{session_id}.json"
+    )
+
+
+def load_map_cache(
+    session_id: str,
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> dict | None:
+    path = get_map_cache_path(session_id, repo_source=repo_source, local_repo_root=local_repo_root)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_map_cache(
+    session_id: str,
+    data: dict,
+    *,
+    repo_source: str = "local",
+    local_repo_root: Path | str | None = None,
+) -> None:
+    path = get_map_cache_path(session_id, repo_source=repo_source, local_repo_root=local_repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def remove_learning_session(
     session_id: str,
     *,

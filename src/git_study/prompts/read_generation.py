@@ -20,40 +20,33 @@ User request:
 
 {selected_context_note}
 
-Commit metadata:
-- SHA: {commit_sha}
-- Subject: {commit_subject}
-- Author: {commit_author}
-- Date: {commit_date}
+Commit: {commit_sha[:12]} — {commit_subject} ({commit_author}, {commit_date}) | Difficulty: {difficulty}
 
-Difficulty: {difficulty}
-
-Changed files summary:
-{changed_files_summary}
-
-Sanitized textual diff:
+Sanitized textual diff (primary source — base all code examples on this):
 {diff_text}
 
-Changed file full content context:
-{file_context_text or "No readable changed file content was extracted."}
+Changed file full content (supplementary — use only when diff alone lacks context for a section):
+{file_context_text or "(not available)"}
 
-Pre-analysis to follow strictly:
+Changed files overview (supplementary):
+{changed_files_summary}
+
+Pre-analysis (follow strictly):
 {analysis_json}
 
 Instructions:
 1. Respond in Korean unless the user explicitly requested another language.
-2. Base everything only on the commit metadata, diff, changed-file full content context, and pre-analysis above.
-3. This is reading material before the quiz, not the quiz itself.
-4. Keep the tone explanatory and concise.
-5. Do not invent code or intent not grounded in the provided context.
-6. Use markdown headings and fenced code blocks so the result renders cleanly in a markdown viewer.
+2. Base everything only on the diff, changed-file context, and pre-analysis above.
+3. Reading guide only — do NOT reveal answers or explain quiz solutions.
+4. Each bullet under 30 words. All code blocks must be actual snippets from the diff, never invented.
+5. Use markdown headings and fenced code blocks.
 
-Output requirements:
-- Start with `## 이번 변경을 먼저 읽는 법`.
-- Then add `## 변경 개요` with 3-5 bullets.
-- Then add `## 핵심 파일` with 2-5 files and why each matters.
-- Then add `## 먼저 볼 코드` with 2-4 short fenced code blocks.
-- Then add `## 이번에 이해해야 할 것` with 3-5 bullets.
-- Then add `## 퀴즈 전에 스스로 점검할 질문` with exactly 4 short bullets.
-- End with `## 주의할 점` and 2-4 bullets about risks, regressions, or trade-offs.
+Output (in order):
+- `## 이번 변경을 먼저 읽는 법` — 2-3 sentence intro
+- `## 변경 개요` — 3-5 bullets
+- `## 핵심 파일` — 2-5 files with one-line reason each
+- `## 먼저 볼 코드` — 2-4 fenced code blocks from the diff
+- `## 이번에 이해해야 할 것` — 3-5 bullets
+- `## 퀴즈 전에 스스로 점검할 질문` — exactly 4 question bullets, no answers
+- `## 주의할 점` — 2-4 bullets on risks or trade-offs
 """.strip()

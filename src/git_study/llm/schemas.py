@@ -1,8 +1,17 @@
 from typing import Any, TypedDict
 
 
-QUESTION_TYPES = ("intent", "behavior", "tradeoff", "vulnerability")
-QUESTION_PLAN_TYPES = QUESTION_TYPES
+QUESTION_TYPES = (
+    "intent",
+    "behavior",
+    "tradeoff",
+    "vulnerability",
+    "test",
+    "performance",
+    "architecture",
+    "improvement",
+)
+QUESTION_PLAN_TYPES = ("intent", "behavior", "tradeoff", "vulnerability")
 
 
 class QuizAnalysisSnippet(TypedDict):

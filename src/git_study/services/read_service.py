@@ -4,6 +4,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from ..graphs.read_graph import read_graph
+from ..llm.token_tracker import stream_graph_with_usage
 
 
 READ_NODE_LABELS = {
@@ -20,28 +21,19 @@ def _read_config() -> dict[str, Any]:
     return {"configurable": {"thread_id": "textual-tui-session"}}
 
 
-def stream_read_progress(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    merged_result: dict[str, Any] = {}
-
-    for chunk in read_graph.stream(
+def stream_read_progress(payload: dict[str, Any], model_override: str = "") -> Iterator[dict[str, Any]]:
+    for event in stream_graph_with_usage(
+        read_graph,
         payload,
-        config=_read_config(),
-        stream_mode="updates",
+        READ_NODE_LABELS,
+        extra_config=_read_config(),
+        model_override=model_override,
     ):
-        if not isinstance(chunk, dict):
-            continue
-        for node_name, update in chunk.items():
-            yield {
-                "type": "node",
-                "node": node_name,
-                "label": READ_NODE_LABELS.get(node_name, node_name),
-            }
-            if isinstance(update, dict):
-                merged_result.update(update)
-
-    final_output = str(merged_result.get("final_output", ""))
-    merged_result["messages"] = [AIMessage(content=final_output)]
-    yield {"type": "result", "result": merged_result}
+        if event["type"] == "result":
+            result = event["result"]
+            final_output = str(result.get("final_output", ""))
+            result["messages"] = [AIMessage(content=final_output)]
+        yield event
 
 
 def run_read(payload: dict[str, Any]) -> dict[str, Any]:

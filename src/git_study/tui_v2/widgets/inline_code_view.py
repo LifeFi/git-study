@@ -600,9 +600,10 @@ class InlineQuizBlock(Widget):
     class AnswerEscaped(Message):
         """Fired when user presses Escape in the inline textarea."""
 
-        def __init__(self, index: int) -> None:
+        def __init__(self, index: int, via_shift_tab: bool = False) -> None:
             super().__init__()
             self.index = index
+            self.via_shift_tab = via_shift_tab
 
     class _AnswerArea(TextArea):
         """Inline textarea for quiz block answers."""
@@ -626,7 +627,7 @@ class InlineQuizBlock(Widget):
             elif event.key == "shift+tab":
                 event.stop()
                 event.prevent_default()
-                self.action_escape_answer()
+                self.action_escape_answer(via_shift_tab=True)
 
         def action_submit_answer(self) -> None:
             answer = self.text.strip()
@@ -638,11 +639,11 @@ class InlineQuizBlock(Widget):
                 self.clear()
                 block.post_message(InlineQuizBlock.AnswerSubmitted(block._index, answer))
 
-        def action_escape_answer(self) -> None:
+        def action_escape_answer(self, via_shift_tab: bool = False) -> None:
             block = self._find_block()
             if block:
                 self._suppress_blur = True
-                block.post_message(InlineQuizBlock.AnswerEscaped(block._index))
+                block.post_message(InlineQuizBlock.AnswerEscaped(block._index, via_shift_tab=via_shift_tab))
 
         def action_focus_cmd_bar(self) -> None:
             self._suppress_blur = True
@@ -1237,8 +1238,10 @@ class InlineCodeView(Widget):
         grades: list[InlineQuizGrade],
         known_files: dict[str, str],
         current_index: int = 0,
+        focus_answer: bool = True,
     ) -> None:
         """Load quiz questions and embed them in the code view."""
+        self._focus_answer_on_load = focus_answer
         self._questions = list(questions)
         self._answers = dict(answers)
         self._grades = list(grades)
@@ -1260,6 +1263,7 @@ class InlineCodeView(Widget):
         """Activate a specific question, switching files if needed."""
         if index < 0 or index >= len(self._questions):
             return
+        self._focus_answer_on_load = True  # 명시적 진입 — 답변창 포커스 허용
         old_index = self._current_q_index
         self._current_q_index = index
         old_file = self._questions[old_index].get("file_path", "") if old_index < len(self._questions) else ""
@@ -1273,6 +1277,14 @@ class InlineCodeView(Widget):
 
     def _focus_active_answer_or_scroll(self) -> None:
         """Focus the active quiz block's answer TextArea, or fall back to cmd-bar."""
+        if not getattr(self, "_focus_answer_on_load", True):
+            # 플래그를 여기서 리셋하지 않음 — load_inline_quiz가 재호출될 때까지 억제 유지
+            # (call_after_refresh가 여러 번 예약되어도 모두 cmd-bar로 포커스)
+            try:
+                self.app.query_one("#cmd-bar").focus_input()
+            except Exception:
+                pass
+            return
         for block in self.query(InlineQuizBlock):
             if block.index == self._current_q_index and block._is_active and block._grade is None:
                 try:

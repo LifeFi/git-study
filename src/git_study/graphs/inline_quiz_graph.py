@@ -10,6 +10,7 @@ from ..domain.inline_anchor import (
 )
 from ..llm.client import LLMClient
 from ..llm.schemas import (
+    QUESTION_TYPES,
     normalize_inline_questions,
     normalize_quiz_review,
 )
@@ -23,6 +24,7 @@ class InlineQuizGraphState(TypedDict, total=False):
     commit_context: dict[str, Any]
     count: int
     user_request: str
+    author_context: str
     actual_paths: list[str]
     file_context_map: dict[str, str]
     full_file_map: dict[str, str]  # 잘리지 않은 원본 파일 내용 (get_neighbor_code_context용)
@@ -80,6 +82,7 @@ def generate_with_anchor(state: InlineQuizGraphState) -> InlineQuizGraphState:
     count = state.get("count", 4)
     actual_paths = state.get("actual_paths", [])
     file_context_map = state.get("file_context_map", {})
+    author_context = state.get("author_context", "self")
 
     prompt = build_inline_combined_prompt(
         commit_sha=str(commit_context.get("commit_sha", ""))[:7],
@@ -90,6 +93,7 @@ def generate_with_anchor(state: InlineQuizGraphState) -> InlineQuizGraphState:
         count=count,
         actual_paths=actual_paths,
         user_request=str(state.get("user_request", "")).strip(),
+        author_context=author_context,
     )
     context_map = state.get("full_file_map") or file_context_map
     tool = build_get_neighbor_code_context_tool(context_map)
@@ -152,6 +156,27 @@ def generate_with_anchor(state: InlineQuizGraphState) -> InlineQuizGraphState:
         )
         if len(questions) >= count:
             break
+
+    # 중복 타입 보정: 중복된 question_type을 미사용 타입으로 교체
+    seen: set[str] = set()
+    duplicates: list[int] = []
+    for i, q in enumerate(questions):
+        if q["question_type"] in seen:
+            duplicates.append(i)
+        else:
+            seen.add(q["question_type"])
+    unused = [t for t in QUESTION_TYPES if t not in seen]
+    for idx, replacement in zip(duplicates, unused):
+        q = questions[idx]
+        questions[idx] = InlineQuizQuestion(
+            id=q["id"],
+            file_path=q["file_path"],
+            anchor_line=q["anchor_line"],
+            anchor_snippet=q["anchor_snippet"],
+            question=q["question"],
+            expected_answer=q["expected_answer"],
+            question_type=replacement,
+        )
 
     return {"inline_questions": questions, "validated_anchors": validated_anchors}
 

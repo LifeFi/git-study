@@ -1,5 +1,6 @@
 import json
 import re
+from contextvars import ContextVar
 from typing import Any
 
 from langchain.chat_models import init_chat_model
@@ -7,6 +8,9 @@ from langchain_core.messages import HumanMessage, ToolMessage
 
 from ..secrets import get_openai_api_key
 from ..settings import DEFAULT_MODEL, load_settings
+
+# 서비스 호출 단위로 모델을 일시 오버라이드할 때 사용 (ContextVar — 스레드 안전)
+model_override_var: ContextVar[str] = ContextVar("model_override", default="")
 
 
 def extract_json_block(text: str) -> str:
@@ -35,7 +39,7 @@ class LLMClient:
                 "OpenAI API key is not configured. "
                 "Set OPENAI_API_KEY or configure it in the app's API Key settings."
             )
-        model = settings.get("model", DEFAULT_MODEL)
+        model = model_override_var.get() or settings.get("model", DEFAULT_MODEL)
         self._llm = init_chat_model(
             model,
             model_provider="openai",
@@ -43,12 +47,13 @@ class LLMClient:
             tags=[f"api_key_source:{source}"],
         )
 
-    def invoke_text(self, prompt: str) -> str:
-        response = self._llm.invoke(prompt)
+    def invoke_text(self, prompt: str, *, callbacks: list | None = None) -> str:
+        config = {"callbacks": callbacks} if callbacks else None
+        response = self._llm.invoke(prompt, config=config)
         return str(response.content)
 
-    def invoke_json(self, prompt: str) -> Any:
-        raw = self.invoke_text(prompt)
+    def invoke_json(self, prompt: str, *, callbacks: list | None = None) -> Any:
+        raw = self.invoke_text(prompt, callbacks=callbacks)
         extracted = extract_json_block(raw)
         try:
             return json.loads(extracted)
