@@ -508,20 +508,28 @@ class InlineQuizBlock(Widget):
         height: auto;
         margin: 0 1;
         padding: 1 2;
-        border: round $panel;
+        border: round #666622;
         background: $boost;
     }
 
     InlineQuizBlock.-active {
-        border: round cyan;
+        border: round #ffff55;
     }
 
     InlineQuizBlock.-answered {
-        border: round green;
+        border: round $panel;
+    }
+
+    InlineQuizBlock.-answered.-active {
+        border: round #ffff55;
     }
 
     InlineQuizBlock.-graded {
-        border: round yellow;
+        border: round #666600;
+    }
+
+    InlineQuizBlock.-graded.-active {
+        border: round #ffff55;
     }
 
     InlineQuizBlock .iqb-header {
@@ -609,7 +617,7 @@ class InlineQuizBlock(Widget):
         """Inline textarea for quiz block answers."""
 
         BINDINGS = [
-            Binding("shift+enter", "submit_answer", priority=True),
+            Binding("enter", "submit_answer", priority=True),
             Binding("escape", "escape_answer", priority=True),
             Binding("pagedown", "scroll_code_down", priority=True),
             Binding("pageup", "scroll_code_up", priority=True),
@@ -620,7 +628,11 @@ class InlineQuizBlock(Widget):
         _suppress_blur: bool = False
 
         def on_key(self, event) -> None:
-            if event.key == "tab":
+            if event.key == "shift+enter":
+                event.stop()
+                event.prevent_default()
+                self.insert("\n")
+            elif event.key == "tab":
                 event.stop()
                 event.prevent_default()
                 self.action_focus_cmd_bar()
@@ -1286,14 +1298,22 @@ class InlineCodeView(Widget):
                 pass
             return
         for block in self.query(InlineQuizBlock):
-            if block.index == self._current_q_index and block._is_active and block._grade is None:
+            if block.index == self._current_q_index and block._is_active:
+                if block._grade is None:
+                    try:
+                        ta = block.query_one(".iqb-input", InlineQuizBlock._AnswerArea)
+                        if ta.display:
+                            ta.focus()
+                            return
+                    except Exception:
+                        pass
+                # 채점 완료 블록: 스크롤 후 code-scroll 포커스
+                block.scroll_visible(animate=True)
                 try:
-                    ta = block.query_one(".iqb-input", InlineQuizBlock._AnswerArea)
-                    if ta.display:
-                        ta.focus()
-                        return
+                    self.query_one("#code-scroll").focus()
                 except Exception:
                     pass
+                return
         try:
             self.app.query_one("#cmd-bar").focus_input()
         except Exception:
@@ -1724,6 +1744,7 @@ class InlineCodeView(Widget):
         """Update active/answered/graded classes on all visible quiz blocks."""
         grade_map: dict[str, InlineQuizGrade] = {g["id"]: g for g in self._grades}
         q_by_index = {i: q for i, q in enumerate(self._questions)}
+        is_answering = getattr(self.app, "_mode", "") == "quiz_answering"
         for block in self.query(InlineQuizBlock):
             i = block.index
             q = q_by_index.get(i)
@@ -1731,7 +1752,7 @@ class InlineCodeView(Widget):
                 continue
             qid = q.get("id", "")
             block.update_state(
-                is_active=(i == self._current_q_index),
+                is_active=(is_answering and i == self._current_q_index),
                 answer=self._answers.get(qid, ""),
                 grade=grade_map.get(qid),
             )

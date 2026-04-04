@@ -23,12 +23,12 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/map", "파일 구조·역할 맵 — /map 뒤에 스페이스로 옵션"),
     ("/grade", "채점"),
     ("/answer", "답변 재진입"),
-    ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
+    ("/clear", "대화 초기화"),
     ("/resume", "이전 대화 불러오기"),
     ("/repo", "저장소 전환 (URL 또는 경로)"),
     ("/apikey", "OpenAI API key 설정"),
     ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
-    ("/hook", "post-commit hook 관리 — 스페이스로 on/off 선택"),
+    ("/hook", "post-commit hook 관리 — /hook 뒤에 스페이스로 on/off 선택"),
     ("/help", "도움말"),
     ("/exit", "종료 (quit, Ctrl+Q 가능)"),
 ]
@@ -84,7 +84,6 @@ _MODEL_DESCRIPTIONS: dict[str, str] = {
     "o3-pro": "고성능 추론 강화",
     "o3-mini": "수학·과학·코딩",
 }
-
 
 
 class CommandInput(TextArea):
@@ -186,10 +185,14 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
         return list(_MAP_CANDIDATES)
 
     if lower == "/hook" or lower.startswith("/hook "):
-        query = lower[len("/hook"):].strip()
+        query = lower[len("/hook") :].strip()
         if not query:
             return list(_HOOK_CANDIDATES)
-        return [(cmd, desc) for cmd, desc in _HOOK_CANDIDATES if query in cmd[len("/hook "):].lower()]
+        return [
+            (cmd, desc)
+            for cmd, desc in _HOOK_CANDIDATES
+            if query in cmd[len("/hook ") :].lower()
+        ]
 
     # /뒤의 쿼리를 명령어 + 설명 전체에서 부분 매칭 (대소문자 무시)
     query = lower[1:]  # leading "/" 제거
@@ -415,7 +418,9 @@ class CommandBar(Widget):
             w = self.query_one("#cb-alert", Static)
             spinner = self._ALERT_SPINNER[self._alert_step % len(self._ALERT_SPINNER)]
             w.update(f"{spinner} {self._alert_text}")
-            color = self._ALERT_COLORS[(self._alert_step // 10) % len(self._ALERT_COLORS)]
+            color = self._ALERT_COLORS[
+                (self._alert_step // 10) % len(self._ALERT_COLORS)
+            ]
             w.styles.background = color
             self._alert_step += 1
         except Exception:

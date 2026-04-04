@@ -32,11 +32,12 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     """
 
     BINDINGS = [
+        Binding("shift+escape", "clear_selection", "선택 해제", priority=True),
         Binding("escape", "cancel", "취소"),
         Binding("enter", "confirm", "확인", priority=True),
         Binding("space", "toggle_select", "선택/해제", priority=True),
-        Binding("pageup", "jump_top", "맨 위로", priority=True),
-        Binding("pagedown", "jump_bottom", "맨 아래로", priority=True),
+        Binding("home", "jump_top", "맨 위로", priority=True),
+        Binding("end", "jump_bottom", "맨 아래로", priority=True),
     ]
 
     CSS = """
@@ -120,7 +121,7 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
         with Vertical(id="picker-container"):
             yield Static("커밋 범위 선택", id="picker-title")
             yield Static(
-                "Space: S→E 선택  |  Enter: 확인  |  Esc: 취소",
+                "Space: S→E 선택  |  Shift+Esc: 전체 해제  |  Enter: 확인  |  Esc: 취소",
                 id="picker-help",
             )
             with ListView(id="commit-list"):
@@ -156,14 +157,23 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     # Actions
     # ------------------------------------------------------------------
 
-    def action_toggle_select(self) -> None:
+    def action_clear_selection(self) -> None:
+        self._selection = CommitSelection()
+        self._refresh_all_labels()
+        self._update_range_session_banner()
+
+    async def action_toggle_select(self) -> None:
         lv = self.query_one("#commit-list", ListView)
         idx = lv.index
         if idx is None:
             return
-        # 버튼 항목은 선택 불가
+        # 버튼 항목은 해당 동작 수행
         item = lv.highlighted_child
-        if item is not None and item.id in ("ci-load-more", "ci-load-all"):
+        if item is not None and item.id == "ci-load-more":
+            await self._do_load_more()
+            return
+        if item is not None and item.id == "ci-load-all":
+            await self._do_load_all()
             return
         self._selection = update_selection_for_index(self._selection, idx)
         self._refresh_all_labels()

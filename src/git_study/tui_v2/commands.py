@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-CommandKind = Literal["quiz", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "install-hook", "uninstall-hook", "chat", "unknown"]
+CommandKind = Literal["quiz", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "hook", "chat", "unknown"]
 
 # @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태)
 _MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
@@ -110,11 +110,9 @@ def parse_command(text: str) -> ParsedCommand:
         return ParsedCommand(kind="clear", raw=text)
     if text.startswith("/resume"):
         return ParsedCommand(kind="resume", raw=text)
-    if text.startswith("/install-hook"):
+    if text.startswith("/hook"):
         parts = text.split(None, 1)
-        return ParsedCommand(kind="install-hook", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
-    if text.startswith("/uninstall-hook"):
-        return ParsedCommand(kind="uninstall-hook", raw=text)
+        return ParsedCommand(kind="hook", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
     if text and not text.startswith("/"):
         mentions = tuple(
             (m.group(1), int(m.group(2) or 0), int(m.group(3) or 0))
