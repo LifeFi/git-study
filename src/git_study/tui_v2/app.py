@@ -28,7 +28,13 @@ from ..domain.repo_context import (
     get_commit_list_snapshot,
     get_repo,
 )
-from ..secrets import get_openai_api_key, get_secrets_path, save_openai_api_key
+from ..secrets import (
+    delete_openai_api_key,
+    get_openai_api_key,
+    get_secrets_path,
+    load_file_openai_api_key,
+    save_openai_api_key,
+)
 from ..services.inline_grade_service import stream_inline_grade_progress
 from ..services.inline_quiz_service import stream_inline_quiz_progress
 from ..domain.repo_map import build_tree_summary, get_commit_counts, get_file_tree
@@ -38,8 +44,10 @@ from ..tui.commit_selection import CommitSelection, selected_commit_indices
 from ..tui.state import (
     append_thread_event,
     find_local_repo_root,
+    list_learning_sessions,
     load_app_state,
     load_chat_threads,
+    delete_learning_session_file,
     load_learning_session_file,
     load_map_cache,
     load_thread_log,
@@ -52,11 +60,11 @@ from ..services.chat_service import stream_chat
 from ..types import InlineQuizGrade, InlineQuizQuestion
 
 from .commands import parse_command
-from .screens import CommitPickerScreen, RepoPickerScreen, ThreadPickerScreen
+from .screens import CommitPickerScreen, QuizListScreen, RepoPickerScreen, ThreadPickerScreen
 from .screens.repo_picker import save_recent_local_repo
 from .widgets.app_status_bar import AppStatusBar
 from .widgets.command_bar import CommandBar
-from .widgets.history_view import HistoryView, LoadingRow
+from .widgets.history_view import FullLogoAnimated, HistoryView, LoadingRow
 from .widgets.inline_code_view import InlineCodeView, InlineQuizBlock
 
 
@@ -71,11 +79,29 @@ class GitStudyAppV2(App):
     CSS = """
     Screen {
         layout: vertical;
+        layers: base overlay;
     }
 
     #scroll-wrapper {
+        layer: base;
         width: 1fr;
         height: 1fr;
+    }
+
+    #scroll-hint {
+        layer: overlay;
+        dock: bottom;
+        height: 1;
+        content-align: center middle;
+        background: #e5b800;
+        color: #1a1a00;
+        text-style: bold;
+        display: none;
+    }
+
+    #scroll-hint:hover {
+        background: #ffd000;
+        color: #000000;
     }
 
     #history-view {
@@ -188,6 +214,9 @@ class GitStudyAppV2(App):
         # 채팅용 커밋 컨텍스트 캐시 (SHA 범위가 같으면 재사용)
         self._chat_ctx_cache_key: tuple[str, str] = ("", "")
         self._chat_ctx_cache_str: str = ""
+        # 액션 큐
+        self._action_queue: list = []  # list of ParsedCommand
+        self._action_queue_block_id: str | None = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -203,6 +232,7 @@ class GitStudyAppV2(App):
                 yield Static("", id="cb-ac-list")
             yield Static(self._mode_bar_text(), id="mode-bar")
             yield Static("", id="content-spacer")
+        yield Static("▼  Tab → cmd bar  ▼", id="scroll-hint")
 
     def on_mount(self) -> None:
         # Prevent scroll containers from stealing focus
@@ -215,6 +245,12 @@ class GitStudyAppV2(App):
             "virtual_size",
             self._on_scroll_wrapper_virtual_size_change,
         )
+        # scroll_y 변화 시 scroll-hint 표시/숨김.
+        self.watch(
+            self.query_one("#scroll-wrapper"),
+            "scroll_y",
+            self._on_scroll_wrapper_scroll_y_change,
+        )
 
         # 로드 전에 미리 채울 수 있는 정보 표시
         try:
@@ -224,7 +260,14 @@ class GitStudyAppV2(App):
         except Exception:
             pass
         self._load_local_repo()
-        self.query_one("#cmd-bar", CommandBar).focus_input()
+        cmd_bar = self.query_one("#cmd-bar", CommandBar)
+        cmd_bar.focus_input()
+        api_key, _ = get_openai_api_key()
+        if not api_key:
+            cmd_bar.set_warning_alert(
+                "OPENAI_API_KEY 미설정 — /apikey set KEY 로 등록하세요"
+            )
+        self._sync_logo_animation()
 
     def _on_scroll_wrapper_virtual_size_change(self) -> None:
         """콘텐츠(HistoryView)가 커질 때 scroll-wrapper를 맨 아래로 스크롤."""
@@ -232,6 +275,19 @@ class GitStudyAppV2(App):
             self.query_one("#scroll-wrapper").scroll_end(animate=False)
         except Exception:
             pass
+
+    def _on_scroll_wrapper_scroll_y_change(self, scroll_y: int) -> None:
+        """scroll_y 변화 시 cmd-bar 미노출이면 scroll-hint를 표시한다."""
+        try:
+            sw = self.query_one("#scroll-wrapper")
+            hint = self.query_one("#scroll-hint")
+            hint.display = scroll_y < sw.max_scroll_y - 5
+        except Exception:
+            pass
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "scroll-hint":
+            self.handle_tab_no_autocomplete()
 
     def on_focus(self, event) -> None:
         """Redirect focus to command bar if it lands outside cmd-bar inputs."""
@@ -577,10 +633,15 @@ class GitStudyAppV2(App):
                 self._start_map(
                     cmd.range_arg,
                     refresh=cmd.refresh,
-                    full_map=cmd.full_map,
                     log_block_id=log_block_id,
                     model_override=cmd.model_override,
                 )
+            case "quiz_list":
+                self._open_quiz_list()
+            case "quiz_clear":
+                self._handle_quiz_clear()
+            case "quiz_retry":
+                self._handle_quiz_retry()
             case "grade":
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
@@ -612,7 +673,9 @@ class GitStudyAppV2(App):
                 if cmd.range_arg == "off":
                     self._handle_uninstall_hook()
                 else:
-                    self._handle_install_hook(cmd.range_arg if cmd.range_arg != "on" else "")
+                    self._handle_install_hook(
+                        cmd.range_arg if cmd.range_arg != "on" else ""
+                    )
             case _:
                 self._set_status_timed(f"알 수 없는 명령: {cmd.raw}", 5.0)
                 self._append_result(f"알 수 없는 명령: {cmd.raw}", "error")
@@ -747,7 +810,9 @@ class GitStudyAppV2(App):
             # 채점 완료 블록(code-scroll 포커스)에서 ESC → 모드 해제 + 블록 비활성화
             self._set_mode("idle")
             try:
-                self.query_one("#code-view", InlineCodeView)._refresh_quiz_blocks_state()
+                self.query_one(
+                    "#code-view", InlineCodeView
+                )._refresh_quiz_blocks_state()
             except Exception:
                 pass
         try:
@@ -759,7 +824,9 @@ class GitStudyAppV2(App):
         if not self._questions:
             return
         focused = self.focused
-        in_quiz = (focused is not None and focused.has_class("iqb-input")) or self._mode == "quiz_answering"
+        in_quiz = (
+            focused is not None and focused.has_class("iqb-input")
+        ) or self._mode == "quiz_answering"
         if in_quiz:
             self._current_q_index = (self._current_q_index - 1) % len(self._questions)
         self._resume_answer_mode()
@@ -768,7 +835,9 @@ class GitStudyAppV2(App):
         if not self._questions:
             return
         focused = self.focused
-        in_quiz = (focused is not None and focused.has_class("iqb-input")) or self._mode == "quiz_answering"
+        in_quiz = (
+            focused is not None and focused.has_class("iqb-input")
+        ) or self._mode == "quiz_answering"
         if in_quiz:
             self._current_q_index = (self._current_q_index + 1) % len(self._questions)
         self._resume_answer_mode()
@@ -802,7 +871,9 @@ class GitStudyAppV2(App):
         qid = q.get("id", "")
         grade_map = {g["id"]: g for g in self._grades}
         if qid in grade_map:
-            self._set_status("[bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]")
+            self._set_status(
+                "[bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]"
+            )
         else:
             self._update_answer_status()
 
@@ -886,8 +957,11 @@ class GitStudyAppV2(App):
         )
 
     def _on_commit_picker_result(
-        self, result: tuple[CommitSelection, list[dict]] | None
+        self, result: tuple[CommitSelection, list[dict]] | str | None
     ) -> None:
+        if result == "switch":
+            self._open_quiz_list()
+            return
         if result is None:
             if self._mode not in ("quiz_loading", "grading"):
                 self._set_status(
@@ -896,6 +970,7 @@ class GitStudyAppV2(App):
                     if self._oldest_sha and self._newest_sha
                     else "명령어를 입력하세요: /quiz, /grade, /help"
                 )
+            self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
             return
         selection, updated_commits = result
         # picker에서 커밋을 더 불러왔을 수 있으므로 앱 커밋 목록 및 limit 동기화
@@ -958,6 +1033,7 @@ class GitStudyAppV2(App):
                 f"커밋 범위 선택됨: {oldest_sha[:7]}..{newest_sha[:7]} ({count} commits). "
                 "/quiz 로 퀴즈를 생성하세요."
             )
+        self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
 
     # ------------------------------------------------------------------
     # Quiz generation
@@ -1164,10 +1240,10 @@ class GitStudyAppV2(App):
         self.call_from_thread(self._apply_quiz_to_view)
 
     def _apply_quiz_to_view(self) -> None:
-        self._set_mode("quiz_answering")
+        self._set_mode("idle")
         total = len(self._questions)
         try:
-            self.query_one("#app-status", AppStatusBar).set_quiz_progress(1, total)
+            self.query_one("#app-status", AppStatusBar).set_quiz_progress(0, 0)
         except Exception:
             pass
         code_view = self.query_one("#code-view", InlineCodeView)
@@ -1179,7 +1255,6 @@ class GitStudyAppV2(App):
             current_index=0,
             focus_answer=False,
         )
-        self._update_answer_status()
         self._sync_quiz_alert()
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         self.call_after_refresh(lambda: self.call_after_refresh(cmd_bar.focus_input))
@@ -1344,7 +1419,6 @@ class GitStudyAppV2(App):
         self,
         range_arg: str,
         refresh: bool = False,
-        full_map: bool = False,
         log_block_id: str | None = None,
         model_override: str = "",
     ) -> None:
@@ -1364,14 +1438,14 @@ class GitStudyAppV2(App):
 
         session_id = f"{oldest_sha[:7]}-{newest_sha[:7]}"
 
-        # 캐시 확인: --full이면 full=True 캐시만 히트, 아니면 모두 히트
+        # 캐시 확인: full=True 캐시만 히트
         if not refresh:
             cached = load_map_cache(
                 session_id,
                 repo_source=self._repo_source,
                 local_repo_root=self._local_repo_root,
             )
-            if cached and (not full_map or cached.get("full", False)):
+            if cached and cached.get("full", False):
                 self.call_from_thread(self._end_progress, op_id)
                 self.call_from_thread(
                     self._log_to_block, "맵 완료 (캐시).", "info", log_block_id, op_id
@@ -1467,8 +1541,8 @@ class GitStudyAppV2(App):
             "full": False,
         }
 
-        # --full: 프로젝트 맵 추가
-        if full_map and self._local_repo_root:
+        # 프로젝트 맵 (로컬 저장소인 경우)
+        if self._local_repo_root:
             self.call_from_thread(
                 self._update_progress, "프로젝트 구조 분석 중...", op_id
             )
@@ -1485,7 +1559,10 @@ class GitStudyAppV2(App):
                 directories: dict[str, str] = {}
                 key_files: dict[str, str] = {}
                 for event in stream_full_map_progress(
-                    tree_summary, hot_files, model_override=model_override
+                    tree_summary,
+                    hot_files,
+                    model_override=model_override,
+                    file_paths=file_paths,
                 ):
                     if event.get("type") == "usage":
                         inp = event.get("input_tokens", 0)
@@ -1508,7 +1585,7 @@ class GitStudyAppV2(App):
                     }
                 )
             except Exception:
-                pass  # full map 실패해도 diff map은 표시
+                pass  # 프로젝트 맵 실패해도 커밋 맵은 표시
 
         try:
             save_map_cache(
@@ -1581,15 +1658,34 @@ class GitStudyAppV2(App):
             t.append(f"  {c['title']}\n", style="")
         t.append("\n")
 
-        # ── 프로젝트 맵 (--full 전용) ────────────────
+        # ── 프로젝트 맵 ────────────────────────────
         if is_full:
             directories: dict[str, str] = data.get("directories", {})
             key_files: dict[str, str] = data.get("key_files", {})
             t.append("  프로젝트 맵\n", style="bold white")
             t.append(_SEP, style="dim")
+            dir_path_set = set(directories.keys())
+
+            def _find_best_parent_dir(kpath: str) -> str:
+                """key_file 경로에서 directories에 있는 가장 가까운 부모를 반환.
+                앞 1컴포넌트(src/ 등) prefix 불일치만 보정한다."""
+                kparts = kpath.split("/")
+                # 직접 조상 (깊은 것부터)
+                for depth in range(len(kparts) - 1, 0, -1):
+                    candidate = "/".join(kparts[:depth])
+                    if candidate in dir_path_set:
+                        return candidate
+                # 앞 1컴포넌트만 제거해 재시도 (src/ 등 prefix 불일치 보정)
+                if len(kparts) > 1:
+                    for depth in range(len(kparts) - 2, 0, -1):
+                        candidate = "/".join(kparts[1 : depth + 1])
+                        if candidate in dir_path_set:
+                            return candidate
+                return ""
+
             keys_by_dir: dict[str, list[tuple[str, str]]] = {}
             for kpath, ksummary in key_files.items():
-                parent = kpath.rsplit("/", 1)[0] if "/" in kpath else ""
+                parent = _find_best_parent_dir(kpath)
                 keys_by_dir.setdefault(parent, []).append(
                     (kpath.rsplit("/", 1)[-1], ksummary)
                 )
@@ -1621,6 +1717,16 @@ class GitStudyAppV2(App):
                     left_k = kindent + "★ " + fname
                     t.append(_pad(left_k, left_col_width), style="bold cyan")
                     t.append(f"{fsummary}\n", style="dim")
+            # directories에 매칭되지 않은 key_files 폴백 렌더링
+            orphaned = [
+                (kpath, ksummary)
+                for kpath, ksummary in sorted(key_files.items())
+                if _find_best_parent_dir(kpath) not in dir_path_set
+            ]
+            for kpath, ksummary in orphaned:
+                left_k = "    ★ " + kpath
+                t.append(_pad(left_k, left_col_width), style="bold cyan")
+                t.append(f"{ksummary}\n", style="dim")
             t.append("\n")
 
         # ── 커밋 맵 ─────────────────────────────────
@@ -1807,7 +1913,9 @@ class GitStudyAppV2(App):
                 ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
                 ("/resume", "이전 대화 불러오기"),
                 ("/repo [URL/경로]", "저장소 전환 (인자 없으면 목록 모달)"),
-                ("/apikey [key]", "OpenAI API key 설정 (인자 없으면 상태 표시)"),
+                ("/apikey", "API key 상태 표시"),
+                ("/apikey set <key>", "API key 설정"),
+                ("/apikey unset", "저장된 API key 삭제"),
                 (
                     "/model [이름]",
                     "모델 변경 (예: /model gpt-4o) · 인자 없으면 목록 표시",
@@ -1942,9 +2050,11 @@ class GitStudyAppV2(App):
 
     def _on_repo_picker_result(self, result: tuple[str, str] | None) -> None:
         if result is None:
+            self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
             return
         repo_source, url_or_path = result
         self._switch_repo_impl(repo_source, url_or_path)
+        self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
 
     def _switch_repo(self, arg: str) -> None:
         """Parse argument and dispatch to _switch_repo_impl."""
@@ -2031,27 +2141,82 @@ class GitStudyAppV2(App):
 
     def _handle_apikey_command(self, arg: str) -> None:
         arg = arg.strip()
-        if arg:
-            self._set_api_key(arg)
-        else:
-            key, source = get_openai_api_key()
-            if source == "missing":
-                self._set_status_timed(
-                    "API key 없음. /apikey <key> 로 설정하세요.", 5.0
-                )
-                self._append_result(
-                    "API key 없음. /apikey <key> 로 설정하세요.", "error"
-                )
+        parts = arg.split(None, 1)
+        sub = parts[0].lower() if parts else ""
+
+        if sub == "set":
+            key = parts[1].strip() if len(parts) > 1 else ""
+            if key:
+                self._set_api_key(key)
             else:
-                masked = f"{key[:8]}..." if key and len(key) > 8 else "(설정됨)"
-                if source == "file":
-                    self._set_status_dismissable(
-                        f"현재 API key: {masked}  (출처: file — {get_secrets_path()})  [dim]ESC 닫기[/dim]"
-                    )
-                else:
-                    self._set_status_dismissable(
-                        f"현재 API key: {masked}  (출처: {source})  [dim]ESC 닫기[/dim]"
-                    )
+                self._set_status_timed("/apikey set 뒤에 key를 입력하세요.", 4.0)
+        elif sub == "unset":
+            self._unset_api_key()
+        else:
+            self._show_apikey_status()
+
+    def _show_apikey_status(self) -> None:
+        active_key, source = get_openai_api_key()
+        file_key = load_file_openai_api_key()
+
+        def _mask(k: str | None) -> str:
+            if not k:
+                return "없음"
+            return f"{k[:8]}..." if len(k) > 8 else "(설정됨)"
+
+        active_masked = _mask(active_key)
+        file_masked = _mask(file_key)
+        secrets_path = get_secrets_path()
+
+        source_label = {
+            "env": "환경변수 (OPENAI_API_KEY)",
+            "file": "secrets.json",
+        }.get(source, "없음")
+
+        file_note = (
+            "  ← 현재 미사용 (env 우선)" if (source == "env" and file_key) else ""
+        )
+        file_line = f"  secrets.json  : {file_masked}{file_note}"
+        detail = "\n".join(
+            [
+                "API Key 상태",
+                f"  활성 (사용 중) : {active_masked}  [{source_label}]",
+                file_line,
+                f"  파일 경로     : {secrets_path}",
+            ]
+        )
+
+        file_summary = "저장됨" if file_key else "없음"
+        unused = " (미사용)" if source == "env" and file_key else ""
+
+        if source == "missing":
+            self._set_status_timed(
+                "API key 없음. /apikey set <key> 로 설정하세요.", 5.0
+            )
+            msg = RichText("API Key 상태\n")
+            msg.append(f"  활성 (사용 중) : {active_masked}  [{source_label}]\n", style="bold red")
+            msg.append(f"  secrets.json  : {file_masked}\n", style="bold red")
+            msg.append(f"  파일 경로     : {secrets_path}")
+            msg.append("\n\n  다음 명령어로 API key를 설정하세요:\n", style="dim")
+            msg.append("  /apikey set [OPENAI_API_KEY]", style="bold color(214)")
+            self._append_result(msg, "info")
+        else:
+            self._set_status_dismissable(
+                f"활성: {source}  ·  file: {file_summary}{unused}  [dim]  ESC 닫기[/dim]"
+            )
+            self._append_result(detail, "info")
+
+    def _sync_logo_animation(self) -> None:
+        """API key 활성화 여부에 따라 로고 애니메이션 재개/정지."""
+        api_key, _ = get_openai_api_key()
+        try:
+            logo = self.query_one(FullLogoAnimated)
+            if api_key:
+                logo.resume_animation()
+            else:
+                logo.pause_animation()
+        except Exception:
+            pass
 
     def _set_api_key(self, key: str) -> None:
         try:
@@ -2064,9 +2229,21 @@ class GitStudyAppV2(App):
                 f"API key 저장됨: {masked}  (~/.git-study/secrets.json)", "info"
             )
             self._log("OpenAI API key 저장 완료.", "success")
+            self.query_one("#cmd-bar", CommandBar).clear_warning_alert()
+            self._sync_logo_animation()
         except Exception as exc:
             self._set_status_timed(f"API key 저장 실패: {exc}", 5.0)
             self._append_result(f"API key 저장 실패: {exc}", "error")
+
+    def _unset_api_key(self) -> None:
+        try:
+            delete_openai_api_key()
+            self._set_status_timed("API key 삭제됨  (~/.git-study/secrets.json)", 3.0)
+            self._append_result("API key 삭제됨  (~/.git-study/secrets.json)", "info")
+            self._sync_logo_animation()
+        except Exception as exc:
+            self._set_status_timed(f"API key 삭제 실패: {exc}", 5.0)
+            self._append_result(f"API key 삭제 실패: {exc}", "error")
 
     # ------------------------------------------------------------------
     # Model management
@@ -2082,15 +2259,8 @@ class GitStudyAppV2(App):
 
         arg = arg.strip()
         if arg:
-            settings = load_settings()
             try:
-                save_settings(
-                    model=arg,
-                    openai_api_key_mode=settings.get("openai_api_key_mode", "session"),
-                    openai_api_key_configured=settings.get(
-                        "openai_api_key_configured", False
-                    ),
-                )
+                save_settings(model=arg)
                 self._set_status_timed(f"모델 변경됨: {arg}", 3.0)
                 self._append_result(f"모델 변경됨: {arg}", "info")
                 self._log(f"모델이 {arg} 으로 변경되었습니다.", "success")
@@ -2382,7 +2552,9 @@ class GitStudyAppV2(App):
         # (load_inline_quiz가 TextArea 위젯을 마운트하며 포커스를 가져갈 수 있음)
         try:
             cmd_bar = self.query_one("#cmd-bar", CommandBar)
-            self.call_after_refresh(lambda: self.call_after_refresh(cmd_bar.focus_input))
+            self.call_after_refresh(
+                lambda: self.call_after_refresh(cmd_bar.focus_input)
+            )
             self.set_timer(0.3, cmd_bar.focus_input)
         except Exception:
             pass
@@ -2423,6 +2595,23 @@ class GitStudyAppV2(App):
                 )
                 hv = self.query_one("#history-view", HistoryView)
                 self._replay_thread_log(hv, thread_log[last_clear + 1 :])
+
+                # 복원 완료 후 명령창이 보이도록 스크롤 + 포커스
+                def _scroll_to_cmdbar():
+                    try:
+                        sw = self.query_one("#scroll-wrapper")
+                        sw.scroll_end(animate=False)
+                    except Exception:
+                        pass
+                    try:
+                        self.query_one("#cmd-bar", CommandBar).focus_input()
+                    except Exception:
+                        pass
+
+                self.call_after_refresh(
+                    lambda: self.call_after_refresh(_scroll_to_cmdbar)
+                )
+                self.set_timer(1.0, _scroll_to_cmdbar)
         except Exception:
             pass
 
@@ -2439,6 +2628,18 @@ class GitStudyAppV2(App):
             match kind:
                 case "user_message":
                     block = hv.append_user_message(content)
+                    # chat에서 실행된 action 결과들이 orig_block_id로 이 블록을 참조하므로 매핑
+                    if orig_block_id:
+                        block_id_map[orig_block_id] = block
+                case "action_message":
+                    # action_responder 확인 메시지 — user_message 블록에 append
+                    target_block = (
+                        block_id_map.get(orig_block_id, block)
+                        if orig_block_id
+                        else block
+                    )
+                    if content.strip():
+                        hv.append_result(content, "assistant", block=target_block)
                 case "assistant_message":
                     if content.strip():
                         hv.append_markdown(content, block=block)
@@ -2649,11 +2850,13 @@ class GitStudyAppV2(App):
 
         # HistoryView에 유저 메시지 표시
         # streaming 위젯은 route 이벤트 후에 생성 (에이전트 라벨이 위에 오도록)
+        # 블록 ID를 미리 생성 — action 이벤트 핸들러에서 DOM 조회 없이 바로 사용
+        chat_block_id = f"hvchat-{uuid.uuid4().hex[:8]}"
         block_holder: list = []
 
         def _mount_user_msg():
             hv = self.query_one("#history-view", HistoryView)
-            block = hv.append_user_message(user_text)
+            block = hv.append_user_message(user_text, block_id=chat_block_id)
             block_holder.append((hv, block, None))  # streaming은 나중에 설정
 
         self.call_from_thread(_mount_user_msg)
@@ -2666,6 +2869,7 @@ class GitStudyAppV2(App):
                     "kind": "user_message",
                     "content": user_text,
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "block_id": chat_block_id,  # 복원 시 block_id_map 복원용
                 },
                 repo_source=self._repo_source,
                 github_repo_url=self._github_repo_url or "",
@@ -2750,7 +2954,23 @@ class GitStudyAppV2(App):
                 continue
 
             etype = event.get("type", "")
-            if etype == "route":
+            if etype == "action":
+                actions = event.get("actions", [])
+                actions_args = event.get("actions_args", [])
+                # chat_block_id는 _start_chat 시작 시 미리 생성 — 클로저 변수 재사용
+                cmds = []
+                for action, args in zip(actions, actions_args):
+                    if action == "none":
+                        continue
+                    raw_cmd = f"/{action} {args}".strip()
+                    cmds.append(parse_command(raw_cmd))
+                if cmds:
+
+                    def _do_enqueue(cs=cmds, bid=chat_block_id):
+                        self._enqueue_actions(cs, bid)
+
+                    self.call_from_thread(_do_enqueue)
+            elif etype == "route":
                 label = event.get("label", "")
 
                 def _add_route_then_streaming(lbl=label):
@@ -2763,6 +2983,38 @@ class GitStudyAppV2(App):
                     block_holder[0] = (hv, block, sw)
 
                 self.call_from_thread(_add_route_then_streaming)
+            elif etype == "action_message":
+                # action_responder 확인 메시지 — 별도 블록으로 표시, streaming 위젯 리셋
+                msg = event.get("content", "")
+
+                def _show_action_msg(m=msg):
+                    if not block_holder:
+                        return
+                    hv, block, streaming = block_holder[0]
+                    # 기존 streaming 위젯이 있으면 종료 (빈 내용)
+                    if streaming is not None:
+                        hv.end_streaming(block, streaming, "")
+                    hv.append_result(m, "assistant", block)
+                    # streaming 리셋 → 이후 chat agent 토큰은 새 위젯에 시작
+                    block_holder[0] = (hv, block, None)
+
+                self.call_from_thread(_show_action_msg)
+                accumulated = ""
+                try:
+                    append_thread_event(
+                        tid,
+                        {
+                            "kind": "action_message",
+                            "content": msg,
+                            "block_id": chat_block_id,
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        },
+                        repo_source=self._repo_source,
+                        github_repo_url=self._github_repo_url or "",
+                        local_repo_root=self._local_repo_root,
+                    )
+                except Exception:
+                    pass
             elif etype == "token":
                 accumulated += event.get("content", "")
                 acc = accumulated
@@ -2864,6 +3116,139 @@ class GitStudyAppV2(App):
                 self.call_from_thread(self._set_mode, "idle")
                 return
 
+    def _open_quiz_list(self) -> None:
+        """/quiz list: 세션별 퀴즈 목록 모달 열기."""
+        sessions = list_learning_sessions(
+            repo_source=self._repo_source,
+            local_repo_root=self._local_repo_root,
+        )
+        if not sessions:
+            self._set_status_timed("저장된 퀴즈 세션이 없습니다.", 3.0)
+            return
+
+        current_sid = self._session_id() or ""
+
+        def on_dismiss(result: str | None) -> None:
+            if result == "switch":
+                self._open_commit_picker()
+                return
+            if result and result != current_sid:
+                self._load_session_by_id(result)
+
+        self.push_screen(
+            QuizListScreen(
+                sessions,
+                current_sid,
+                repo_source=self._repo_source,
+                local_repo_root=self._local_repo_root,
+            ),
+            on_dismiss,
+        )
+
+    def _load_session_by_id(self, session_id: str) -> None:
+        """세션 ID로 퀴즈 세션 전환. oldest/newest_sha를 세션 파일에서 읽어 복원한다."""
+        try:
+            payload = load_learning_session_file(
+                session_id,
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
+                local_repo_root=self._local_repo_root,
+            )
+        except Exception:
+            payload = None
+
+        if not payload:
+            self._set_status_timed(f"세션을 불러올 수 없습니다: {session_id}", 4.0)
+            return
+
+        oldest_sha = payload.get("oldest_sha", "")
+        newest_sha = payload.get("newest_sha", "")
+        if not oldest_sha or not newest_sha:
+            self._set_status_timed("세션 SHA 정보가 없습니다.", 4.0)
+            return
+
+        self._oldest_sha = oldest_sha
+        self._newest_sha = newest_sha
+
+        # AppStatusBar 커밋 범위 갱신 (count 미보관이므로 0 전달 → 숫자 숨김)
+        try:
+            self.query_one("#app-status", AppStatusBar).set_range(oldest_sha, newest_sha, 0)
+        except Exception:
+            pass
+
+        # 선택된 범위를 state 파일에 영구 저장
+        self._save_app_state()
+
+        self._try_restore_session(replay_log=False)
+        self._set_status_timed(f"세션 복원: {session_id}", 3.0)
+
+    def _handle_quiz_clear(self) -> None:
+        """/quiz clear: 현재 범위 퀴즈 세션 파일 삭제 + 인메모리 상태 초기화."""
+        sid = self._session_id()
+        if not sid:
+            self._set_status_timed("커밋 범위가 선택되지 않았습니다.", 4.0)
+            return
+        if self._mode in ("quiz_loading", "grading", "chatting"):
+            self._set_status_timed("진행 중인 작업이 있어 삭제할 수 없습니다.", 4.0)
+            return
+        deleted = delete_learning_session_file(
+            sid,
+            repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
+            local_repo_root=self._local_repo_root,
+        )
+        # 인메모리 상태 초기화
+        self._questions = []
+        self._answers = {}
+        self._grades = []
+        self._grading_summary = {}
+        self._current_q_index = 0
+        if self._mode == "quiz_answering":
+            self._set_mode("idle")
+        # InlineCodeView 퀴즈 블록 제거
+        try:
+            self.query_one("#code-view", InlineCodeView).clear_quiz()
+        except Exception:
+            pass
+        self._sync_quiz_alert()
+        if deleted:
+            self._set_status_dismissable(
+                f"퀴즈 세션이 삭제됐습니다. ({sid})  [dim]ESC 닫기[/dim]"
+            )
+        else:
+            self._set_status_timed("삭제할 퀴즈 세션이 없습니다.", 4.0)
+
+    def _handle_quiz_retry(self) -> None:
+        """/quiz retry: 답변·채점 초기화하고 Q1부터 다시 답변 모드 진입. 문제는 유지."""
+        if not self._questions:
+            self._set_status_timed("퀴즈가 없습니다. /quiz 로 먼저 생성하세요.", 4.0)
+            return
+        if self._mode in ("quiz_loading", "grading", "chatting"):
+            self._set_status_timed("진행 중인 작업이 있어 재시작할 수 없습니다.", 4.0)
+            return
+
+        self._answers = {}
+        self._grades = []
+        self._grading_summary = {}
+        self._current_q_index = 0
+
+        try:
+            code_view = self.query_one("#code-view", InlineCodeView)
+            code_view.load_inline_quiz(
+                questions=self._questions,
+                answers=self._answers,
+                grades=self._grades,
+                known_files=self._known_files,
+                current_index=0,
+            )
+        except Exception:
+            pass
+
+        self._save_session()
+        self._set_mode("quiz_answering")
+        self._sync_quiz_alert()
+        self._set_status_timed("답변·채점 초기화 완료 — Q1부터 다시 시작합니다.", 3.0)
+
     def _handle_clear(self) -> None:
         """/clear: 새 thread_id 생성 + 화면 초기화. 이전 대화는 /resume 으로 복원 가능."""
         try:
@@ -2907,6 +3292,7 @@ class GitStudyAppV2(App):
 
     def _on_thread_picker_result(self, result: dict | None) -> None:
         if result is None:
+            self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
             return
         threads_data = load_chat_threads(
             repo_source=self._repo_source,
@@ -2940,6 +3326,7 @@ class GitStudyAppV2(App):
             pass
         self._set_status_timed(f"{result['label']} 재개됨.", 3.0)
         self._append_result(f"{result['label']} 재개됨.", "info")
+        self.call_after_refresh(self.query_one("#cmd-bar", CommandBar).focus_input)
 
     def _get_thread_summary(self, thread_id: str) -> tuple[int, list[str]]:
         """thread log에서 (user_message 수, 최근 2개 미리보기) 반환."""
@@ -3017,12 +3404,15 @@ class GitStudyAppV2(App):
     def _mode_bar_text(self, code_active: bool = False) -> RichText:
         t = RichText()
         if code_active:
-            t.append("▶▶ ", style="bold color(99)")
-            t.append("Code view on", style="bold color(99)")
+            t.append("Chat", style="dim")
+            t.append(" ◀ ", style="bold white")
+            t.append("[ Code/Quiz ● ]", style="bold color(99)")
         else:
-            t.append("▶▶ ", style="bold green")
-            t.append("Chat mode on", style="bold green")
-        t.append("  (shift+tab to cycle)", style="dim")
+            t.append("[ Chat ● ]", style="bold green")
+            t.append(" ▶ ", style="bold white")
+            t.append("Code/Quiz", style="dim")
+        t.append("    Shift+Tab", style="bold white")
+        t.append(" to switch", style="dim")
         return t
 
     def _update_mode_bar(self) -> None:
@@ -3062,6 +3452,14 @@ class GitStudyAppV2(App):
 
     def action_global_tab(self) -> None:
         """App-level Tab: code view → panel cycle (file-tree→code-scroll→cmd-bar), chat mode → scroll+focus cmd-bar."""
+        # CommitPickerScreen이 열려 있으면 선택 해제에 Tab을 위임
+        if isinstance(self.screen, CommitPickerScreen):
+            self.screen.action_clear_selection()
+            return
+        # QuizListScreen이 열려 있으면 패널 전환에 Tab을 위임
+        if isinstance(self.screen, QuizListScreen):
+            self.screen.action_switch_panel()
+            return
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         if cmd_bar._ac_candidates:
             cmd_bar.action_tab_pressed()
@@ -3146,6 +3544,13 @@ class GitStudyAppV2(App):
 
     def action_toggle_view(self) -> None:
         """Shift+Tab: toggle between Chat mode and Code View."""
+        # 모달 피커 간 전환
+        if isinstance(self.screen, CommitPickerScreen):
+            self.screen.action_switch_screen()
+            return
+        if isinstance(self.screen, QuizListScreen):
+            self.screen.action_switch_screen()
+            return
         focused = self.focused
         if focused is not None and focused.has_class("iqb-input"):
             # Shift+Tab: 답변 모드 해제 + Chat View로 전환.
@@ -3158,7 +3563,9 @@ class GitStudyAppV2(App):
             if self._mode == "quiz_answering":
                 self._set_mode("idle")
                 try:
-                    self.query_one("#code-view", InlineCodeView)._refresh_quiz_blocks_state()
+                    self.query_one(
+                        "#code-view", InlineCodeView
+                    )._refresh_quiz_blocks_state()
                 except Exception:
                     pass
             self._show_chat_view()
@@ -3315,6 +3722,10 @@ class GitStudyAppV2(App):
                 self._progress_rows[op_id] = row
         except Exception:
             pass
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_progress(op_id, text)
+        except Exception:
+            pass
 
     def _append_token_usage(
         self,
@@ -3372,6 +3783,10 @@ class GitStudyAppV2(App):
                 row.set_text(text)
         except Exception:
             pass
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_progress(op_id, text)
+        except Exception:
+            pass
 
     def _end_progress(self, op_id: str = "") -> None:
         """로딩 위젯 제거. 경과 시간을 _progress_elapsed에 저장."""
@@ -3381,6 +3796,10 @@ class GitStudyAppV2(App):
             if row is not None:
                 self._progress_elapsed[op_id] = row.elapsed_seconds
                 hv.end_progress(row)
+        except Exception:
+            pass
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_progress(op_id, None)
         except Exception:
             pass
 
@@ -3407,9 +3826,84 @@ class GitStudyAppV2(App):
         # quiz_answering 진입 시는 on_focus(iqb-input)가 처리 — 이중 호출 방지
         if mode != "quiz_answering":
             self.call_after_refresh(self._sync_quiz_alert)
+        # 큐에 대기 중인 액션이 있으면 idle 진입 시 처리
+        if mode == "idle" and self._action_queue:
+            self.call_after_refresh(self._process_action_queue)
+
+    def _update_queue_status(self) -> None:
+        """AppStatusBar 큐 상태 갱신. 메인 스레드에서 호출."""
+        try:
+            sb = self.query_one("#app-status", AppStatusBar)
+            if self._action_queue:
+                labels = " → ".join(f"/{c.kind}" for c in self._action_queue)
+                sb.set_queue(f"[큐: {labels}]")
+            else:
+                sb.set_queue("")
+        except Exception:
+            pass
+
+    def _process_action_queue(self) -> None:
+        """큐에서 다음 액션 꺼내 실행. 메인 스레드에서 호출."""
+        if not self._action_queue:
+            self._update_queue_status()
+            return
+        # mode가 바쁘면 대기 (idle 또는 chatting일 때만 실행)
+        if self._mode not in ("idle", "chatting"):
+            return
+        cmd = self._action_queue.pop(0)
+        self._update_queue_status()
+        bid = self._action_queue_block_id
+        # 실행 헤더 표시
+        cmd_str = f"/{cmd.kind}"
+        if cmd.range_arg:
+            cmd_str += f" {cmd.range_arg}"
+        try:
+            hv = self.query_one("#history-view", HistoryView)
+            block = hv.query_one(f"#{bid}") if bid else None
+            hv.append_result(f"▶ {cmd_str}", "info", block=block)
+        except Exception:
+            pass
+        # 실행
+        match cmd.kind:
+            case "quiz":
+                self._start_quiz(
+                    cmd.range_arg,
+                    log_block_id=bid,
+                    count=cmd.quiz_count,
+                    author_context=cmd.author_context,
+                )
+            case "review":
+                self._start_review(cmd.range_arg, log_block_id=bid)
+            case "grade":
+                self._start_grading(log_block_id=bid)
+            case "map":
+                self._start_map(
+                    cmd.range_arg,
+                    refresh=cmd.refresh,
+                    log_block_id=bid,
+                )
+
+    def _enqueue_actions(self, cmds: list, block_id: str | None) -> None:
+        """액션 목록을 큐에 추가. 메인 스레드에서 호출."""
+        self._action_queue.extend(cmds)
+        self._action_queue_block_id = block_id
+        # 여러 개면 예약 행 표시
+        if len(cmds) > 1:
+            labels = " → ".join(
+                ("/" + c.kind + (f" {c.range_arg}" if c.range_arg else ""))
+                for c in cmds
+            )
+            try:
+                hv = self.query_one("#history-view", HistoryView)
+                block = hv.query_one(f"#{block_id}") if block_id else None
+                hv.append_result(f"◆ 예약: {labels}", "info", block=block)
+            except Exception:
+                pass
+        self._update_queue_status()
+        self._process_action_queue()
 
     def _update_answer_status(self) -> None:
-        hint = "[bold cyan]Shift+Enter[/bold cyan] 제출  [bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]"
+        hint = "[bold cyan]Enter[/bold cyan] 답변 입력  [bold cyan]Shift+Enter[/bold cyan] 줄바꿈  [bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]"
         self._set_status(hint)
 
 

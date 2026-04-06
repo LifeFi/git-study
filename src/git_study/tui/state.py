@@ -449,6 +449,25 @@ def save_learning_session_file(
     return path
 
 
+def delete_learning_session_file(
+    session_id: str,
+    *,
+    repo_source: str = "local",
+    github_repo_url: str = "",
+    local_repo_root: Path | str | None = None,
+) -> bool:
+    path = get_learning_session_path(
+        session_id,
+        repo_source=repo_source,
+        github_repo_url=github_repo_url,
+        local_repo_root=local_repo_root,
+    )
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
 def list_learning_sessions(
     *,
     repo_source: str = "local",

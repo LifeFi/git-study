@@ -114,9 +114,18 @@ def stream_chat(
                     stream_mode=["messages", "updates"],
                 ):
                     if mode == "updates":
-                        # supervisor 노드 완료 → route 이벤트 yield
+                        # supervisor 노드 완료 → route/action 이벤트 yield
                         if isinstance(data, dict) and "supervisor" in data:
                             supervisor_output = data["supervisor"]
+                            actions = supervisor_output.get("actions", ["none"])
+                            actions_args = supervisor_output.get("actions_args", [])
+                            if actions and actions[0] != "none":
+                                yielded_any = True
+                                yield {
+                                    "type": "action",
+                                    "actions": actions,
+                                    "actions_args": actions_args,
+                                }
                             route = supervisor_output.get("route", "general")
                             if not route_emitted:
                                 event = {
@@ -131,36 +140,48 @@ def stream_chat(
                     elif mode == "messages":
                         # data = (chunk, metadata)
                         chunk, metadata = data
+                        node = metadata.get("langgraph_node", "")
                         # supervisor 노드 출력은 route JSON이므로 스킵
-                        if metadata.get("langgraph_node") == "supervisor":
+                        if node == "supervisor":
                             continue
                         if isinstance(chunk, AIMessageChunk):
                             if chunk.content:
-                                full_content += str(chunk.content)
-                                yielded_any = True
-                                yield {"type": "token", "content": str(chunk.content)}
+                                if node == "action_responder":
+                                    # action_responder 확인 메시지는 별도 이벤트로 분리
+                                    yielded_any = True
+                                    yield {"type": "action_message", "content": str(chunk.content)}
+                                else:
+                                    full_content += str(chunk.content)
+                                    yielded_any = True
+                                    yield {"type": "token", "content": str(chunk.content)}
                             # 마지막 청크에 usage_metadata가 포함됨
                             if chunk.usage_metadata:
                                 um = chunk.usage_metadata
                                 input_tokens = um.get("input_tokens", 0)
                                 output_tokens = um.get("output_tokens", 0)
                         elif isinstance(chunk, AIMessage):
-                            # 비스트리밍 폴백: AIMessage로 텍스트가 통째로 온 경우
-                            if chunk.content and not full_content:
-                                full_content += str(chunk.content)
-                                yielded_any = True
-                                yield {"type": "token", "content": str(chunk.content)}
-                            if chunk.usage_metadata:
-                                um = chunk.usage_metadata
-                                input_tokens = um.get("input_tokens", 0)
-                                output_tokens = um.get("output_tokens", 0)
-                            for tc in (chunk.tool_calls or []):
-                                yielded_any = True
-                                yield {
-                                    "type": "tool_call",
-                                    "name": tc.get("name", ""),
-                                    "args": tc.get("args", {}),
-                                }
+                            if node == "action_responder":
+                                # action_responder 확인 메시지는 별도 이벤트로 분리
+                                if chunk.content:
+                                    yielded_any = True
+                                    yield {"type": "action_message", "content": str(chunk.content)}
+                            else:
+                                # 비스트리밍 폴백: AIMessage로 텍스트가 통째로 온 경우
+                                if chunk.content and not full_content:
+                                    full_content += str(chunk.content)
+                                    yielded_any = True
+                                    yield {"type": "token", "content": str(chunk.content)}
+                                if chunk.usage_metadata:
+                                    um = chunk.usage_metadata
+                                    input_tokens = um.get("input_tokens", 0)
+                                    output_tokens = um.get("output_tokens", 0)
+                                for tc in (chunk.tool_calls or []):
+                                    yielded_any = True
+                                    yield {
+                                        "type": "tool_call",
+                                        "name": tc.get("name", ""),
+                                        "args": tc.get("args", {}),
+                                    }
                         elif isinstance(chunk, ToolMessage):
                             yield {"type": "tool_result", "content": str(chunk.content)}
 

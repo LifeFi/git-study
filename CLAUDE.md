@@ -96,6 +96,10 @@ src/git_study/
   - 활성 여부: `is_answering = (_mode == "quiz_answering")` — `_refresh_quiz_blocks_state()` 참조.
 - 퀴즈 블록에서 ESC/Shift+Tab 발생 시 `_set_mode("idle")` + `_refresh_quiz_blocks_state()` 호출 필수.
 
+### Textual 키 이벤트
+
+Tab 등 특수 키를 커스텀 처리할 때 → `docs/textual-key-handling.md` 참고.
+
 ### CommandBar
 
 - 프롬프트 `>` 고정 (삭제 불가)

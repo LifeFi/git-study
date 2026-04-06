@@ -1,6 +1,6 @@
 [project]
 name = "git-study"
-version = "0.2.2"
+version = "0.2.3"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-git-study = "git_study.tui:run"
-git-study-v2 = "git_study.tui_v2:run_v2"
+git-study-v1 = "git_study.tui:run"
+git-study = "git_study.tui_v2:run_v2"
 git-study-streamlit = "git_study.streamlit_app:run_chat"
 
 [tool.uv]

@@ -60,7 +60,7 @@ _init_state()
 st.title("🗂️ Git Study — AI 기반 Git 커밋 학습 도구")
 st.markdown(
     "터미널 기반 TUI 앱으로 Git 커밋을 AI와 함께 학습하세요. "
-    "아래 명령어로 설치 후 `git-study-v2`를 실행하면 됩니다."
+    "아래 명령어로 설치 후 `git-study`를 실행하면 됩니다."
 )
 
 # with st.expander("🔧 uv 설치 (처음 한 번만)"):
@@ -72,34 +72,66 @@ st.markdown(
 #         language="powershell",
 #     )
 
-_tab_testpypi, _tab_pypi = st.tabs(
-    ["🧪 TestPyPI (최신 개발판)", "📦 PyPI (정식 — 예정)"]
+
+def _render_usage() -> None:
+    st.markdown("**3. 사용법**")
+    st.markdown("**실행**")
+    st.code(
+        "cd /path/to/your/repo    # .git 폴더가 있는 프로젝트 루트로 이동\n"
+        "git-study                # CLI 실행",
+        language="bash",
+    )
+    st.markdown("**OpenAI API 키 설정** (처음 한 번만)")
+    st.code("/apikey set sk-...", language="bash")
+    st.markdown("**주요 명령어**")
+    st.code(
+        "/commits              # 커밋 범위 선택\n"
+        "/quiz                 # 퀴즈 생성  [ SHIFT+TAB ]으로 대화 ↔ 코드 전환\n"
+        "/grade                # 퀴즈 채점\n\n"
+        "/repo  [URL or path]  # 저장소 스위칭\n"
+        "/clear                # 대화 세션 새로 시작\n"
+        "/resume               # 대화 세션 이어서 진행\n"
+        "/help                 # 도움말 표시",
+        language="bash",
+    )
+
+
+_tab_testpypi, _tab_pypi, _tab_chat = st.tabs(
+    ["🧪 TestPyPI (최신 개발판)", "📦 [예정] PyPI (정식)", "💬 채팅 데모(로컬)"]
 )
 with _tab_testpypi:
     st.markdown(
         "📄 [https://test.pypi.org/project/git-study/](https://test.pypi.org/project/git-study/)"
     )
     st.markdown("**1. uv 설치** (처음 한 번만)")
+    st.markdown("**macOS / Linux**")
     st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+    st.markdown("**Windows (PowerShell)**")
+    st.code(
+        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        language="powershell",
+    )
     st.markdown("**2. git-study 설치**")
     st.code(
         "uv tool install --index-url https://test.pypi.org/simple/"
         " --extra-index-url https://pypi.org/simple/ git-study",
         language="bash",
     )
+    st.divider()
+    _render_usage()
 with _tab_pypi:
     st.markdown("**1. uv 설치** (처음 한 번만)")
+    st.markdown("**macOS / Linux**")
     st.code("curl -LsSf https://astral.sh/uv/install.sh | sh", language="bash")
+    st.markdown("**Windows (PowerShell)**")
+    st.code(
+        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        language="powershell",
+    )
     st.markdown("**2. git-study 설치**")
     st.code("uv tool install git-study", language="bash")
-
-st.code("git-study-v2", language="bash")
-
-with st.expander("⚙️ 필수 설정: OpenAI API 키"):
-    st.markdown("`git-study-v2` 실행 후 커맨드바에 아래 명령어를 입력하세요.")
-    st.code("/apikey sk-...", language="bash")
-
-st.divider()
+    st.divider()
+    _render_usage()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -301,11 +333,7 @@ with st.sidebar:
     )
     _selected = st.selectbox("모델 선택", _SM, index=_idx, label_visibility="collapsed")
     if _selected != _current:
-        save_settings(
-            model=_selected,
-            openai_api_key_mode=_settings.get("openai_api_key_mode", "session"),
-            openai_api_key_configured=_settings.get("openai_api_key_configured", False),
-        )
+        save_settings(model=_selected)
         st.rerun()
 
     # ── 대화 관리 ──────────────────────────────────────────────────────────────
@@ -319,166 +347,172 @@ with st.sidebar:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 메인 영역
+# 대화 탭
 # ──────────────────────────────────────────────────────────────────────────────
-if not st.session_state.repo_root:
-    st.info("👈 사이드바에서 Git 저장소 경로를 입력하고 **저장소 열기**를 눌러주세요.")
-    st.stop()
-
-if not st.session_state.newest_sha:
-    st.info("👈 사이드바에서 학습할 커밋 범위를 선택해주세요.")
-    st.stop()
-
-# 커밋 컨텍스트 로드 (범위 변경 시 재빌드)
-if not st.session_state.commit_context:
-    with st.spinner("커밋 컨텍스트 로드 중…"):
-        try:
-            ctx = _build_context_range(
-                st.session_state.repo_root,
-                st.session_state.oldest_sha,
-                st.session_state.newest_sha,
-            )
-            st.session_state.commit_context = ctx
-        except Exception as e:
-            st.error(f"컨텍스트 빌드 실패: {e}")
-            st.stop()
-
-ctx = st.session_state.commit_context
-
-# 커밋 정보 헤더
-with st.expander(
-    f"📌 {ctx.get('commit_subject', '')} — `{ctx.get('commit_sha', '')[:20]}`",
-    expanded=False,
-):
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**작성자:** {ctx.get('commit_author', '')}")
-        st.markdown(f"**날짜:** {ctx.get('commit_date', '')}")
-    with col2:
-        st.markdown("**변경 파일:**")
-        st.code(ctx.get("changed_files_summary", "(없음)"), language=None)
-
-st.divider()
-
-# ── 채팅 히스토리 표시 ────────────────────────────────────────────────────────
-for msg in st.session_state.messages:
-    role = msg["role"]
-
-    if role == "tool":
-        with st.expander(f"🔧 도구 결과: `{msg.get('name', '')}`", expanded=False):
-            st.code(msg["content"], language=None)
-    elif role == "human":
-        with st.chat_message("user"):
-            st.markdown(msg["content"])
-    elif role == "ai":
-        with st.chat_message("assistant"):
-            if meta := msg.get("meta"):
-                if route_label := meta.get("route_label"):
-                    st.caption(f"💡 {route_label}")
-            st.markdown(msg["content"])
-
-# ── 입력창 ────────────────────────────────────────────────────────────────────
-user_input = st.chat_input("질문을 입력하세요…")
-
-if user_input:
-    # ── /model 커맨드 처리 ────────────────────────────────────────────────────
-    if user_input.strip().lower().startswith("/model"):
-        parts = user_input.strip().split(maxsplit=1)
-        from git_study.settings import load_settings, save_settings, DEFAULT_MODEL
-
-        if len(parts) == 1:
-            # /model → 현재 모델과 제안 목록 표시
-            current = load_settings().get("model", DEFAULT_MODEL)
-            suggestions = "\n".join(f"- `{m}`" for m in SUGGESTED_MODELS)
-            with st.chat_message("assistant"):
-                st.markdown(
-                    f"현재 모델: **`{current}`**\n\n"
-                    f"사용 가능한 모델 예시:\n{suggestions}\n\n"
-                    f"`/model gpt-4o` 형식으로 변경하세요."
-                )
+with _tab_chat:
+    if not st.session_state.repo_root:
+        st.info(
+            "👈 사이드바에서 Git 저장소 경로를 입력하고 **저장소 열기**를 눌러주세요.\n\n로컬에서 Streamlit 실행 중일때만 이용 가능합니다. (로컬 파일 접근 이슈)"
+        )
+    elif not st.session_state.newest_sha:
+        st.info("👈 사이드바에서 학습할 커밋 범위를 선택해주세요.")
+    else:
+        # 커밋 컨텍스트 로드 (범위 변경 시 재빌드)
+        if not st.session_state.commit_context:
+            with st.spinner("커밋 컨텍스트 로드 중…"):
+                try:
+                    ctx = _build_context_range(
+                        st.session_state.repo_root,
+                        st.session_state.oldest_sha,
+                        st.session_state.newest_sha,
+                    )
+                    st.session_state.commit_context = ctx
+                except Exception as e:
+                    st.error(f"컨텍스트 빌드 실패: {e}")
+                    ctx = {}
         else:
-            new_model = parts[1].strip()
-            settings = load_settings()
-            save_settings(
-                model=new_model,
-                openai_api_key_mode=settings.get("openai_api_key_mode", "session"),
-                openai_api_key_configured=settings.get(
-                    "openai_api_key_configured", False
-                ),
-            )
-            with st.chat_message("user"):
-                st.markdown(user_input)
-            with st.chat_message("assistant"):
-                st.markdown(f"모델이 **`{new_model}`** 으로 변경되었습니다.")
-            st.rerun()
-        st.stop()
+            ctx = st.session_state.commit_context
 
-    st.session_state.messages.append({"role": "human", "content": user_input})
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    from git_study.services.chat_service import stream_chat
-
-    commit_context_str = _context_summary(ctx) if ctx else ""
-    route_label = None
-    full_response = ""
-
-    with st.chat_message("assistant"):
-        route_placeholder = st.empty()
-        response_placeholder = st.empty()
-
-        try:
-            for event in stream_chat(
-                thread_id=st.session_state.thread_id,
-                user_text=user_input,
-                commit_context=commit_context_str,
-                oldest_sha=st.session_state.oldest_sha or "",
-                newest_sha=st.session_state.newest_sha or "",
-                local_repo_root=Path(st.session_state.repo_root),
-                repo_source="local",
+        if ctx:
+            # 커밋 정보 헤더
+            with st.expander(
+                f"📌 {ctx.get('commit_subject', '')} — `{ctx.get('commit_sha', '')[:20]}`",
+                expanded=False,
             ):
-                etype = event.get("type")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**작성자:** {ctx.get('commit_author', '')}")
+                    st.markdown(f"**날짜:** {ctx.get('commit_date', '')}")
+                with col2:
+                    st.markdown("**변경 파일:**")
+                    st.code(ctx.get("changed_files_summary", "(없음)"), language=None)
 
-                if etype == "route":
-                    route_label = event.get("label", "")
-                    route_placeholder.caption(f"💡 {route_label}")
+            st.divider()
 
-                elif etype == "token":
-                    full_response += event["content"]
-                    response_placeholder.markdown(full_response + "▌")
+            # ── 채팅 히스토리 표시 ────────────────────────────────────────────
+            for msg in st.session_state.messages:
+                role = msg["role"]
 
-                elif etype == "tool_call":
-                    tool_name = event.get("name", "")
-                    with st.expander(f"🔧 도구 호출: `{tool_name}`", expanded=False):
-                        st.json(event.get("args", {}))
+                if role == "tool":
+                    with st.expander(
+                        f"🔧 도구 결과: `{msg.get('name', '')}`", expanded=False
+                    ):
+                        st.code(msg["content"], language=None)
+                elif role == "human":
+                    with st.chat_message("user"):
+                        st.markdown(msg["content"])
+                elif role == "ai":
+                    with st.chat_message("assistant"):
+                        if meta := msg.get("meta"):
+                            if route_label := meta.get("route_label"):
+                                st.caption(f"💡 {route_label}")
+                        st.markdown(msg["content"])
 
-                elif etype == "tool_result":
-                    with st.expander("🔧 도구 결과", expanded=False):
-                        st.code(event["content"], language=None)
-                    st.session_state.messages.append(
-                        {
-                            "role": "tool",
-                            "name": "",
-                            "content": event["content"],
-                        }
+            # ── 입력창 ────────────────────────────────────────────────────────
+            user_input = st.chat_input("질문을 입력하세요…")
+
+            if user_input:
+                # ── /model 커맨드 처리 ────────────────────────────────────────
+                if user_input.strip().lower().startswith("/model"):
+                    parts = user_input.strip().split(maxsplit=1)
+                    from git_study.settings import (
+                        load_settings,
+                        save_settings,
+                        DEFAULT_MODEL,
                     )
 
-                elif etype == "done":
-                    full_response = event.get("full_content", full_response)
-                    response_placeholder.markdown(full_response)
+                    if len(parts) == 1:
+                        current = load_settings().get("model", DEFAULT_MODEL)
+                        suggestions = "\n".join(f"- `{m}`" for m in SUGGESTED_MODELS)
+                        with st.chat_message("assistant"):
+                            st.markdown(
+                                f"현재 모델: **`{current}`**\n\n"
+                                f"사용 가능한 모델 예시:\n{suggestions}\n\n"
+                                f"`/model gpt-4o` 형식으로 변경하세요."
+                            )
+                    else:
+                        new_model = parts[1].strip()
+                        save_settings(model=new_model)
+                        with st.chat_message("user"):
+                            st.markdown(user_input)
+                        with st.chat_message("assistant"):
+                            st.markdown(
+                                f"모델이 **`{new_model}`** 으로 변경되었습니다."
+                            )
+                        st.rerun()
+                else:
+                    st.session_state.messages.append(
+                        {"role": "human", "content": user_input}
+                    )
+                    with st.chat_message("user"):
+                        st.markdown(user_input)
 
-                elif etype == "error":
-                    st.error(f"오류: {event['content']}")
-                    break
+                    from git_study.services.chat_service import stream_chat
 
-        except Exception as e:
-            st.error(f"스트리밍 오류: {e}")
+                    commit_context_str = _context_summary(ctx) if ctx else ""
+                    route_label = None
+                    full_response = ""
 
-    if full_response:
-        st.session_state.messages.append(
-            {
-                "role": "ai",
-                "content": full_response,
-                "meta": {"route_label": route_label},
-            }
-        )
+                    with st.chat_message("assistant"):
+                        route_placeholder = st.empty()
+                        response_placeholder = st.empty()
+
+                        try:
+                            for event in stream_chat(
+                                thread_id=st.session_state.thread_id,
+                                user_text=user_input,
+                                commit_context=commit_context_str,
+                                oldest_sha=st.session_state.oldest_sha or "",
+                                newest_sha=st.session_state.newest_sha or "",
+                                local_repo_root=Path(st.session_state.repo_root),
+                                repo_source="local",
+                            ):
+                                etype = event.get("type")
+
+                                if etype == "route":
+                                    route_label = event.get("label", "")
+                                    route_placeholder.caption(f"💡 {route_label}")
+
+                                elif etype == "token":
+                                    full_response += event["content"]
+                                    response_placeholder.markdown(full_response + "▌")
+
+                                elif etype == "tool_call":
+                                    tool_name = event.get("name", "")
+                                    with st.expander(
+                                        f"🔧 도구 호출: `{tool_name}`", expanded=False
+                                    ):
+                                        st.json(event.get("args", {}))
+
+                                elif etype == "tool_result":
+                                    with st.expander("🔧 도구 결과", expanded=False):
+                                        st.code(event["content"], language=None)
+                                    st.session_state.messages.append(
+                                        {
+                                            "role": "tool",
+                                            "name": "",
+                                            "content": event["content"],
+                                        }
+                                    )
+
+                                elif etype == "done":
+                                    full_response = event.get(
+                                        "full_content", full_response
+                                    )
+                                    response_placeholder.markdown(full_response)
+
+                                elif etype == "error":
+                                    st.error(f"오류: {event['content']}")
+                                    break
+
+                        except Exception as e:
+                            st.error(f"스트리밍 오류: {e}")
+
+                    if full_response:
+                        st.session_state.messages.append(
+                            {
+                                "role": "ai",
+                                "content": full_response,
+                                "meta": {"route_label": route_label},
+                            }
+                        )

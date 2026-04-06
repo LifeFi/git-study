@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-CommandKind = Literal["quiz", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "hook", "chat", "unknown"]
+CommandKind = Literal["quiz", "quiz_clear", "quiz_retry", "quiz_list", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "hook", "chat", "unknown"]
 
 # @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태)
 _MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
@@ -55,6 +55,12 @@ def parse_command(text: str) -> ParsedCommand:
     if text.startswith("/quiz"):
         parts = text.split(None, 1)
         arg = parts[1] if len(parts) > 1 else ""
+        if arg == "clear":
+            return ParsedCommand(kind="quiz_clear", raw=text)
+        if arg == "retry":
+            return ParsedCommand(kind="quiz_retry", raw=text)
+        if arg == "list":
+            return ParsedCommand(kind="quiz_list", raw=text)
         quiz_count = QUIZ_COUNT_DEFAULT
         author_context = "self"
         range_arg = arg

@@ -60,29 +60,13 @@ def delete_openai_api_key() -> None:
         path.unlink(missing_ok=True)
 
 
-def get_openai_api_key(
-    preferred_mode: str | None = None,
-) -> tuple[str | None, str]:
+def get_openai_api_key() -> tuple[str | None, str]:
     env_value = os.environ.get("OPENAI_API_KEY", "").strip()
     if env_value:
         return env_value, "env"
-
-    if preferred_mode == "file":
-        file_value = load_file_openai_api_key()
-        if file_value:
-            return file_value, "file"
-        if _session_openai_api_key:
-            return _session_openai_api_key, "session"
-        return None, "missing"
-
-    if preferred_mode == "session":
-        if _session_openai_api_key:
-            return _session_openai_api_key, "session"
-        return None, "missing"
-
-    if _session_openai_api_key:
-        return _session_openai_api_key, "session"
     file_value = load_file_openai_api_key()
     if file_value:
         return file_value, "file"
+    if _session_openai_api_key:
+        return _session_openai_api_key, "session"
     return None, "missing"

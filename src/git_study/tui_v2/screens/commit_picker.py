@@ -34,7 +34,8 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     BINDINGS = [
         Binding("shift+escape", "clear_selection", "선택 해제", priority=True),
         Binding("escape", "cancel", "취소"),
-        Binding("enter", "confirm", "확인", priority=True),
+        Binding("shift+enter", "confirm", "확인", priority=True),
+        Binding("enter", "toggle_select", "선택/해제", priority=True),
         Binding("space", "toggle_select", "선택/해제", priority=True),
         Binding("home", "jump_top", "맨 위로", priority=True),
         Binding("end", "jump_bottom", "맨 아래로", priority=True),
@@ -54,9 +55,7 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     }
 
     #picker-title {
-        text-style: bold;
-        padding: 1 0 0 0;
-        color: $text;
+        padding: 1 0 1 0;
     }
 
     #picker-help {
@@ -117,11 +116,21 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     # Compose
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _nav_title() -> Text:
+        t = Text(no_wrap=True)
+        t.append("[ 커밋 범위 선택 ]", style="bold green")
+        t.append(" ▶ ", style="bold white")
+        t.append("퀴즈 세션 선택", style="dim")
+        t.append("    Shift+Tab", style="bold white")
+        t.append(" to switch", style="dim")
+        return t
+
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-container"):
-            yield Static("커밋 범위 선택", id="picker-title")
+            yield Static(self._nav_title(), id="picker-title")
             yield Static(
-                "Space: S→E 선택  |  Shift+Esc: 전체 해제  |  Enter: 확인  |  Esc: 취소",
+                "Space/Enter: S→E 선택  |  Tab: 전체 해제  |  Shift+Enter: 확인  |  Esc: 취소",
                 id="picker-help",
             )
             with ListView(id="commit-list"):
@@ -156,6 +165,14 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+
+    async def _on_key(self, event) -> None:
+        if event.key == "tab":
+            event.prevent_default()
+            event.stop()
+            self.action_clear_selection()
+        else:
+            await super()._on_key(event)
 
     def action_clear_selection(self) -> None:
         self._selection = CommitSelection()
@@ -193,6 +210,10 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_switch_screen(self) -> None:
+        """Shift+Tab: 퀴즈 세션 피커로 전환."""
+        self.dismiss("switch")
 
     def action_jump_top(self) -> None:
         lv = self.query_one("#commit-list", ListView)

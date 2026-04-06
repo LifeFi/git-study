@@ -1249,7 +1249,6 @@ class GitStudyApp(App):
         self.local_repo_root = find_local_repo_root()
         self.settings = load_settings()
         self.model_name = self.settings.get("model", DEFAULT_MODEL)
-        self.api_key_mode = self.settings.get("openai_api_key_mode", "session")
         app_state = load_app_state(local_repo_root=self.local_repo_root)
         self.repo_source = app_state.get("repo_source", "local")
         self.github_repo_url = app_state.get("github_repo_url", "")
@@ -2447,7 +2446,7 @@ class GitStudyApp(App):
         )
 
     def _api_key_status_text(self) -> str:
-        api_key, source = get_openai_api_key(self.api_key_mode)
+        api_key, source = get_openai_api_key()
         if api_key:
             if source == "env":
                 return "환경변수 OPENAI_API_KEY 사용 중"
@@ -2465,7 +2464,7 @@ class GitStudyApp(App):
         self.query_one("#api-key-status", Static).update(self._api_key_status_text())
 
     def _ensure_api_key(self, *, action_label: str) -> bool:
-        api_key, _ = get_openai_api_key(self.api_key_mode)
+        api_key, _ = get_openai_api_key()
         if api_key:
             return True
         self.prompt_api_key_settings(action_label=action_label)
@@ -5225,11 +5224,7 @@ class GitStudyApp(App):
         if action == "clear":
             clear_session_openai_api_key()
             delete_openai_api_key()
-            save_settings(
-                model=self.model_name,
-                openai_api_key_mode=self.api_key_mode,
-                openai_api_key_configured=False,
-            )
+            save_settings(model=self.model_name)
             self.settings = load_settings()
             self._refresh_api_key_status()
             self._set_status("저장된 API Key를 제거했습니다.")
@@ -5250,11 +5245,7 @@ class GitStudyApp(App):
             set_session_openai_api_key(api_key)
             delete_openai_api_key()
 
-        save_settings(
-            model=self.model_name,
-            openai_api_key_mode=self.api_key_mode,
-            openai_api_key_configured=True,
-        )
+        save_settings(model=self.model_name)
         self.settings = load_settings()
         self._refresh_api_key_status()
         if self.api_key_mode == "file":
@@ -5451,7 +5442,7 @@ class GitStudyApp(App):
         self._set_status("Read, Basic, Inline 생성을 시작합니다.")
         self.action_generate_read()
         self.action_generate_quiz()
-        api_key, _ = get_openai_api_key(self.api_key_mode)
+        api_key, _ = get_openai_api_key()
         if api_key:
             self._show_inline_quiz(
                 widget_id="result-inline-widget",
@@ -5470,7 +5461,7 @@ class GitStudyApp(App):
         force_regenerate: bool = False,
     ) -> None:
         inline_quiz = self.query_one(f"#{widget_id}", InlineQuizWidget)
-        api_key, _ = get_openai_api_key(self.api_key_mode)
+        api_key, _ = get_openai_api_key()
         if not api_key:
             inline_quiz.show_placeholder(
                 "OpenAI API Key를 설정하면 인라인 퀴즈를 생성할 수 있습니다."

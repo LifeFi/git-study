@@ -26,7 +26,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/clear", "대화 초기화"),
     ("/resume", "이전 대화 불러오기"),
     ("/repo", "저장소 전환 (URL 또는 경로)"),
-    ("/apikey", "OpenAI API key 설정"),
+    ("/apikey", "API key 관리 — /apikey 뒤에 스페이스로 목록"),
     ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
     ("/hook", "post-commit hook 관리 — /hook 뒤에 스페이스로 on/off 선택"),
     ("/help", "도움말"),
@@ -34,7 +34,9 @@ _COMMANDS: list[tuple[str, str]] = [
 ]
 
 _QUIZ_CANDIDATES: list[tuple[str, str]] = [
-    ("/quiz", "현재 선택된 커밋 범위로 퀴즈 생성"),
+    ("/quiz list", "세션별 퀴즈 목록 보기"),
+    ("/quiz clear", "현재 범위 퀴즈 세션 삭제"),
+    ("/quiz retry", "답변만 초기화하고 다시 풀기 (문제·채점 결과 유지)"),
     ("/quiz 5", "질문 5개 생성 (기본 3개)"),
     ("/quiz --ai", "AI 생성 코드 모드 (취약점·테스트·성능 집중)"),
     ("/quiz --others", "타인 코드 모드 (의도·동작·아키텍처 집중)"),
@@ -55,15 +57,19 @@ _REPO_CANDIDATES: list[tuple[str, str]] = [
 ]
 
 _MAP_CANDIDATES: list[tuple[str, str]] = [
-    ("/map", "현재 커밋 범위 — 변경 파일 역할 맵"),
-    ("/map --full", "전체 프로젝트 — 폴더 구조 + 핵심 파일"),
+    ("/map", "커밋 맵 + 프로젝트 구조"),
     ("/map --refresh", "캐시 무시하고 재생성"),
-    ("/map --full --refresh", "전체 맵 캐시 무시 재생성"),
 ]
 
 _HOOK_CANDIDATES: list[tuple[str, str]] = [
     ("/hook on", "post-commit hook 설치 (커밋 후 자동 퀴즈)"),
     ("/hook off", "post-commit hook 제거"),
+]
+
+_APIKEY_CANDIDATES: list[tuple[str, str]] = [
+    ("/apikey", "현재 API key 상태 표시"),
+    ("/apikey set ", "API key 설정 (key 입력 후 Enter)"),
+    ("/apikey unset", "저장된 API key 삭제"),
 ]
 
 _MODEL_DESCRIPTIONS: dict[str, str] = {
@@ -194,6 +200,16 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
             if query in cmd[len("/hook ") :].lower()
         ]
 
+    if lower == "/apikey" or lower.startswith("/apikey "):
+        query = lower[len("/apikey") :].strip()
+        if not query:
+            return list(_APIKEY_CANDIDATES)
+        return [
+            (cmd, desc)
+            for cmd, desc in _APIKEY_CANDIDATES
+            if query in cmd[len("/apikey") :].lower()
+        ]
+
     # /뒤의 쿼리를 명령어 + 설명 전체에서 부분 매칭 (대소문자 무시)
     query = lower[1:]  # leading "/" 제거
     return [
@@ -227,6 +243,14 @@ class CommandBar(Widget):
         background: rgb(30,160,60);
         color: white;
         content-align: left middle;
+        display: none;
+    }
+
+    CommandBar #cb-progress {
+        width: auto;
+        height: auto;
+        padding: 0 1;
+        color: $text;
         display: none;
     }
 
@@ -341,6 +365,10 @@ class CommandBar(Widget):
         self._alert_timer: Timer | None = None
         self._alert_step: int = 0
         self._alert_text: str = ""
+        self._warning_text: str = ""
+        self._progress_map: dict[str, str] = {}
+        self._progress_timer: Timer | None = None
+        self._progress_spinner_idx: int = 0
 
     # ------------------------------------------------------------------
     # Compose
@@ -349,6 +377,7 @@ class CommandBar(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal(id="cb-status-row"):
             yield Static("", id="cb-alert")
+            yield Static("", id="cb-progress")
             yield Static(self.status_text, id="cb-status")
         with Horizontal(id="cb-input-row"):
             yield Static("❯", id="cb-prompt")
@@ -389,6 +418,8 @@ class CommandBar(Widget):
 
     def set_quiz_alert(self, text: str) -> None:
         """알림 영역에 스피너+색상 애니메이션과 함께 텍스트를 표시."""
+        if self._warning_text:
+            return  # API key 경고가 우선 — 키 없으면 퀴즈 기능 불가
         self._alert_text = text
         try:
             self.query_one("#cb-alert", Static).display = True
@@ -411,6 +442,37 @@ class CommandBar(Widget):
             w.styles.background = self._ALERT_COLORS[0]
         except Exception:
             pass
+        if self._warning_text:
+            self._show_warning()
+
+    def set_warning_alert(self, text: str) -> None:
+        """API key 미설정 등 정적 경고를 cb-alert에 표시."""
+        self._warning_text = text
+        if self._alert_timer is None:
+            self._show_warning()
+
+    def clear_warning_alert(self) -> None:
+        """정적 경고 제거. quiz alert가 없으면 cb-alert를 숨긴다."""
+        self._warning_text = ""
+        if self._alert_timer is None:
+            try:
+                w = self.query_one("#cb-alert", Static)
+                w.update("")
+                w.display = False
+            except Exception:
+                pass
+
+    def _show_warning(self) -> None:
+        try:
+            w = self.query_one("#cb-alert", Static)
+            w.display = True
+            w.update(f"⚠ {self._warning_text}")
+        except Exception:
+            pass
+        try:
+            self.query_one("#cb-alert", Static).styles.background = "#cc5500"
+        except Exception:
+            pass
 
     def _step_alert(self) -> None:
         """타이머 콜백 — 스피너 프레임 + 배경색 순환."""
@@ -426,7 +488,48 @@ class CommandBar(Widget):
         except Exception:
             pass
 
+    def set_progress(self, op_id: str, text: str | None) -> None:
+        """op_id별 진행 상태를 #cb-progress에 수평 표시. text=None이면 해당 op 제거."""
+        if not op_id:
+            return
+        if text is None:
+            self._progress_map.pop(op_id, None)
+        else:
+            self._progress_map[op_id] = text
+
+        if self._progress_map:
+            try:
+                self.query_one("#cb-progress", Static).display = True
+            except Exception:
+                pass
+            if self._progress_timer is None:
+                self._progress_spinner_idx = 0
+                self._progress_timer = self.set_interval(0.1, self._tick_progress_spinner)
+        else:
+            if self._progress_timer is not None:
+                self._progress_timer.stop()
+                self._progress_timer = None
+            try:
+                w = self.query_one("#cb-progress", Static)
+                w.update("")
+                w.display = False
+            except Exception:
+                pass
+
+    def _tick_progress_spinner(self) -> None:
+        if not self._progress_map:
+            return
+        frame = self._ALERT_SPINNER[self._progress_spinner_idx % len(self._ALERT_SPINNER)]
+        self._progress_spinner_idx += 1
+        items = [f"{frame} {msg}" for msg in self._progress_map.values()]
+        try:
+            self.query_one("#cb-progress", Static).update("\n".join(items))
+        except Exception:
+            pass
+
     def _restore_default_hint(self) -> None:
+        if self._progress_map:
+            return
         self._status_timer = None
         self.status_text = self._context_hint
 
@@ -594,7 +697,7 @@ class CommandBar(Widget):
             self._close_autocomplete()
             inp = self.query_one("#cb-input", CommandInput)
             if cmd.startswith("@"):
-                inp.value = cmd if cmd.endswith("/") else cmd + "["
+                inp.value = cmd
                 inp.cursor_position = len(inp.value)
             else:
                 inp.value = cmd
@@ -738,6 +841,14 @@ class CommandBar(Widget):
         if 0 <= self._ac_index < len(self._ac_candidates):
             cmd, _ = self._ac_candidates[self._ac_index]
             self._close_autocomplete()
+
+            # 입력만 모드: 후행 공백으로 끝나는 후보는 입력창에만 채우고 실행 안 함
+            if cmd.endswith(" "):
+                inp = self.query_one("#cb-input", CommandInput)
+                inp.value = cmd
+                inp.cursor_position = len(cmd)
+                return
+
             text = cmd.strip()
 
             # @ 멘션 선택
@@ -748,8 +859,8 @@ class CommandBar(Widget):
                         # 폴더 선택: @dir/ 채우고 on_command_input_changed가 자동완성 재트리거
                         inp.value = text
                     else:
-                        # 파일 선택: @file.py[ 채우고 라인 범위 입력 대기
-                        inp.value = text + "["
+                        # 파일 선택: @file.py 채우기
+                        inp.value = text
                     inp.cursor_position = len(inp.value)
                 except Exception:
                     pass

@@ -578,6 +578,27 @@ class InlineQuizBlock(Widget):
         display: none;
     }
 
+    InlineQuizBlock .iqb-hint {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+        display: none;
+    }
+
+    InlineQuizBlock .iqb-grade-hint {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+        display: none;
+    }
+
+    InlineQuizBlock .iqb-regrade-hint {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+        display: none;
+    }
+
     InlineQuizBlock .iqb-input {
         height: auto;
         min-height: 3;
@@ -645,6 +666,23 @@ class InlineQuizBlock(Widget):
             answer = self.text.strip()
             if not answer:
                 return
+            if answer == "/grade":
+                from .command_bar import CommandBar, CommandInput
+                self._suppress_blur = True
+                self.clear()
+                try:
+                    cb = self.app.query_one("#cmd-bar", CommandBar)
+                    cb.focus_input()
+                except Exception:
+                    pass
+                try:
+                    cb = self.app.query_one("#cmd-bar", CommandBar)
+                    inp = cb.query_one("#cb-input", CommandInput)
+                    inp.value = "/grade"
+                    inp.post_message(CommandInput.Submitted("/grade"))
+                except Exception:
+                    pass
+                return
             block = self._find_block()
             if block:
                 self._suppress_blur = True
@@ -664,11 +702,24 @@ class InlineQuizBlock(Widget):
             except Exception:
                 pass
 
+        def on_focus(self) -> None:
+            block = self._find_block()
+            if block:
+                try:
+                    block.query_one(".iqb-hint", Static).display = True
+                except Exception:
+                    pass
+
         def on_blur(self) -> None:
+            block = self._find_block()
+            if block:
+                try:
+                    block.query_one(".iqb-hint", Static).display = False
+                except Exception:
+                    pass
             if self._suppress_blur:
                 self._suppress_blur = False
                 return
-            block = self._find_block()
             if block and block._is_active:
                 block.post_message(InlineQuizBlock.AnswerEscaped(block._index))
 
@@ -743,6 +794,21 @@ class InlineQuizBlock(Widget):
         yield Static("", classes="iqb-my-answer")
         yield Static("", classes="iqb-model-answer")
         yield Static("", classes="iqb-feedback")
+        yield Static(
+            "[bold cyan]Enter[/bold cyan] 답변 입력  "
+            "[bold cyan]Shift+Enter[/bold cyan] 줄바꿈  "
+            "[bold cyan]Shift+↑↓[/bold cyan] 이동  "
+            "[dim]Esc 종료[/dim]",
+            classes="iqb-hint",
+        )
+        yield Static(
+            "채점하려면 명령창에서 [bold cyan]/grade[/bold cyan] 입력",
+            classes="iqb-grade-hint",
+        )
+        yield Static(
+            "다시 풀어보려면 명령창에서 [bold cyan]/quiz retry[/bold cyan] 입력",
+            classes="iqb-regrade-hint",
+        )
         yield InlineQuizBlock._AnswerArea(classes="iqb-input")
 
     def on_mount(self) -> None:
@@ -775,6 +841,9 @@ class InlineQuizBlock(Widget):
             self.query_one(".iqb-my-answer", Static).display = is_graded
             self.query_one(".iqb-model-answer", Static).display = is_graded
             self.query_one(".iqb-feedback", Static).display = is_graded
+            is_answered = bool(self._answer) and not is_graded
+            self.query_one(".iqb-grade-hint", Static).display = is_answered
+            self.query_one(".iqb-regrade-hint", Static).display = is_graded
             if is_graded:
                 score = self._grade.get("score", 0)
                 feedback = self._grade.get("feedback", "")
@@ -1529,7 +1598,7 @@ class InlineCodeView(Widget):
             pass
 
     def _refresh_cursor_quiz(self) -> None:
-        """퀴즈 모드: 커서가 속한 세그먼트만 업데이트 (전체 순회 방지)."""
+        """퀴즈 모드: 커서/선택 영역이 속한 세그먼트 업데이트."""
         # 세그먼트 위젯 캐시 — 리마운트 시 _quiz_segment_widgets = [] 로 무효화됨
         if not self._quiz_segment_widgets:
             try:
@@ -1539,52 +1608,71 @@ class InlineCodeView(Widget):
 
         segments = self._quiz_segment_widgets
         meta = self._quiz_segment_meta
+        sel_lo, sel_hi = self._get_sel_range()
 
-        # 현재 커서가 속한 세그먼트 인덱스 결정
-        new_seg_idx: int | None = None
-        cursor_in_seg: int | None = None
+        # Track which segment has the current cursor for future clearing
+        new_cursor_seg_idx = None
 
-        if self._cursor_line is not None:
-            for i, (start, end, _lines, t2r) in enumerate(meta):
+        for i, (start, end, lines_slice, t2r) in enumerate(meta):
+            # Does this segment contain the cursor?
+            has_cursor_here = False
+            if self._cursor_line is not None:
                 if t2r is not None:
-                    render_idx = t2r.get(self._cursor_line)
-                    if render_idx is not None and start <= render_idx < end:
-                        new_seg_idx = i
-                        cursor_in_seg = render_idx - start
-                        break
+                    ridx = t2r.get(self._cursor_line)
+                    if ridx is not None and start <= ridx < end:
+                        has_cursor_here = True
                 else:
-                    render_idx = self._cursor_line - 1
-                    if start <= render_idx < end:
-                        new_seg_idx = i
-                        cursor_in_seg = render_idx - start
-                        break
+                    ridx = self._cursor_line - 1
+                    if start <= ridx < end:
+                        has_cursor_here = True
 
-        old_seg_idx = self._last_cursor_seg_idx
-        old_cursor_in_seg = self._last_cursor_in_seg
+            if has_cursor_here:
+                new_cursor_seg_idx = i
 
-        # 변화 없으면 skip
-        if old_seg_idx == new_seg_idx and old_cursor_in_seg == cursor_in_seg:
-            return
+            # Does this segment overlap with selection?
+            has_selection = sel_lo is not None
+            overlaps_selection = False
+            rev_t2r: dict[int, int] | None = None
+            if t2r is not None:
+                rev_t2r = {v: k for k, v in t2r.items()}
+            if has_selection:
+                if t2r is None:
+                    # plain: ridx+1 == file line
+                    if sel_lo <= end and sel_hi >= start + 1:
+                        overlaps_selection = True
+                else:
+                    for ridx in range(start, end):
+                        fline = rev_t2r.get(ridx, 0) if rev_t2r else 0
+                        if fline and sel_lo <= fline <= sel_hi:
+                            overlaps_selection = True
+                            break
 
-        # 이전 세그먼트 plain 복원 (커서가 다른 세그먼트로 이동한 경우만)
-        if old_seg_idx is not None and old_seg_idx != new_seg_idx:
-            if old_seg_idx < len(segments) and old_seg_idx < len(meta):
-                _, _, old_lines, _ = meta[old_seg_idx]
-                segments[old_seg_idx].update(_join_lines(old_lines))
+            # A segment needs update if it has the cursor, overlaps selection,
+            # or it WAS the cursor segment (and we need to clear it).
+            should_update = has_cursor_here or overlaps_selection or (i == self._last_cursor_seg_idx)
 
-        # 새 세그먼트 커서 하이라이트 적용
-        if new_seg_idx is not None and new_seg_idx < len(segments):
-            _, _, lines_slice, _ = meta[new_seg_idx]
-            if cursor_in_seg is not None:
-                result = Text(no_wrap=True)
-                for i, line in enumerate(lines_slice):
-                    result.append_text(_overlay_bg(line, "on color(17)") if i == cursor_in_seg else line)
-                segments[new_seg_idx].update(result)
-            else:
-                segments[new_seg_idx].update(_join_lines(lines_slice))
+            if should_update:
+                if i < len(segments):
+                    result = Text(no_wrap=True)
+                    for ridx in range(start, end):
+                        line = lines_slice[ridx - start]
+                        if t2r is None:
+                            fline = ridx + 1
+                        else:
+                            fline = rev_t2r.get(ridx, 0) if rev_t2r else 0
 
-        self._last_cursor_seg_idx = new_seg_idx
-        self._last_cursor_in_seg = cursor_in_seg
+                        is_cursor = (fline == self._cursor_line) if fline else False
+                        is_sel = (has_selection and fline and sel_lo <= fline <= sel_hi)
+
+                        if is_cursor and not has_selection:
+                            result.append_text(_overlay_bg(line, "on color(17)"))
+                        elif is_sel:
+                            result.append_text(_overlay_bg(line, "on color(18)"))
+                        else:
+                            result.append_text(line)
+                    segments[i].update(result)
+
+        self._last_cursor_seg_idx = new_cursor_seg_idx
 
     def _refresh_cursor(self) -> None:
         """커서/선택 변경 시 CodePane만 갱신 (재하이라이트 없이)."""
@@ -1626,11 +1714,19 @@ class InlineCodeView(Widget):
             self.repo, self.base_commit_sha, path,
         ) if self.repo and self.base_commit_sha else ""
 
+        self._total_file_lines = len(target_content.splitlines())
+
         # Build Claude Code-style diff lines for segment slicing
         if base_content:
             render_lines = build_claude_diff_lines(language, base_content, target_content)
             # target line (1-based) -> render_lines index (0-based) mapping
             target_to_render = _build_target_to_render_map(base_content, target_content)
+            # Build visual row (0-indexed) -> target file line mapping (0 = deleted line)
+            vis_map = [0] * len(render_lines)
+            for fl, ri in target_to_render.items():
+                if ri < len(vis_map):
+                    vis_map[ri] = fl
+            self._visual_to_file_line = vis_map
         else:
             highlighted_lines_plain = highlight_code_lines(target_content, language)
             render_lines = [
@@ -1639,6 +1735,7 @@ class InlineCodeView(Widget):
             ]
             # No diff: 1:1 mapping (target line N -> index N-1)
             target_to_render = {i + 1: i for i in range(len(render_lines))}
+            self._visual_to_file_line = list(range(1, len(render_lines) + 1))
 
         total_lines = len(render_lines)
 
@@ -1703,7 +1800,8 @@ class InlineCodeView(Widget):
             qid = q.get("id", "")
             answer = self._answers.get(qid, "")
             grade = grade_map.get(qid)
-            is_active = global_idx == self._current_q_index
+            app_mode = getattr(self.app, "_mode", "")
+            is_active = (global_idx == self._current_q_index) and (app_mode == "quiz_answering")
             block = InlineQuizBlock(
                 question=q,
                 index=global_idx,
@@ -1929,6 +2027,53 @@ class InlineCodeView(Widget):
             pass
         return True
 
+    def _scroll_to_cursor_quiz(self) -> None:
+        """퀴즈 모드: 커서 라인이 뷰포트 안에 들어오도록 #code-scroll 스크롤 조정."""
+        if self._cursor_line is None or not self._questions:
+            return
+        try:
+            scroll = self.query_one("#code-scroll", _QuizCodeScroll)
+            meta = self._quiz_segment_meta
+
+            # find render index
+            render_idx = None
+            for start, end, lines, t2r in meta:
+                if t2r is not None:
+                    ridx = t2r.get(self._cursor_line)
+                    if ridx is not None and start <= ridx < end:
+                        render_idx = ridx
+                        break
+                else:
+                    ridx = self._cursor_line - 1
+                    if start <= ridx < end:
+                        render_idx = ridx
+                        break
+
+            if render_idx is None:
+                return
+
+            # find widget and offset
+            widgets = self._quiz_segment_widgets or list(self.query(".code-segment"))
+            for i, (start, end, lines, t2r) in enumerate(meta):
+                if start <= render_idx < end:
+                    if i < len(widgets):
+                        w = widgets[i]
+                        line_offset = render_idx - start
+                        abs_y = w.region.y + line_offset
+
+                        viewport_h = scroll.scrollable_content_region.height
+                        if viewport_h == 0:
+                            viewport_h = scroll.size.height
+
+                        cur_y = int(scroll.scroll_y)
+                        if abs_y < cur_y:
+                            scroll.scroll_to(y=abs_y, animate=False)
+                        elif abs_y >= cur_y + viewport_h:
+                            scroll.scroll_to(y=abs_y - viewport_h + 1, animate=False)
+                    break
+        except Exception:
+            pass
+
     def _scroll_to_cursor(self) -> None:
         """커서 라인이 뷰포트 안에 들어오도록 CodePane 스크롤 조정."""
         if self._cursor_line is None:
@@ -2007,31 +2152,44 @@ class InlineCodeView(Widget):
     def on_key(self, event) -> None:
         """커서 이동, 비주얼 선택, push 키 처리."""
         # 퀴즈 모드: up/down/page up/down으로 #code-scroll 스크롤 (파일 트리 포커스 제외)
-        if self._questions and self._is_code_scroll_focused() and event.key in ("up", "k", "down", "j", "pageup", "ctrl+b", "pagedown", "ctrl+f"):
-            try:
-                scroll = self.query_one("#code-scroll", _QuizCodeScroll)
-                page = max(scroll.size.height - 2, 1)
-                if event.key in ("down", "j"):
-                    scroll.scroll_to(y=int(scroll.scroll_y) + 1, animate=False)
-                    if self._cursor_line is not None:
-                        self._cursor_line = min(self._total_file_lines, self._cursor_line + 1)
-                elif event.key in ("up", "k"):
-                    scroll.scroll_to(y=max(int(scroll.scroll_y) - 1, 0), animate=False)
-                    if self._cursor_line is not None:
-                        self._cursor_line = max(1, self._cursor_line - 1)
-                elif event.key in ("pagedown", "ctrl+f"):
-                    scroll.scroll_page_down()
-                    if self._cursor_line is not None:
-                        self._cursor_line = min(self._total_file_lines, self._cursor_line + page)
-                else:  # pageup, ctrl+b
-                    scroll.scroll_page_up()
-                    if self._cursor_line is not None:
-                        self._cursor_line = max(1, self._cursor_line - page)
+        if self._questions and self._is_code_scroll_focused():
+            if event.key in ("up", "k", "down", "j", "pageup", "ctrl+b", "pagedown", "ctrl+f"):
+                try:
+                    scroll = self.query_one("#code-scroll", _QuizCodeScroll)
+                    page = max(scroll.size.height - 2, 1)
+                    if event.key in ("down", "j"):
+                        if self._cursor_line is not None:
+                            self._cursor_line = min(self._total_file_lines, self._cursor_line + 1)
+                    elif event.key in ("up", "k"):
+                        if self._cursor_line is not None:
+                            self._cursor_line = max(1, self._cursor_line - 1)
+                    elif event.key in ("pagedown", "ctrl+f"):
+                        if self._cursor_line is not None:
+                            self._cursor_line = min(self._total_file_lines, self._cursor_line + page)
+                    else:  # pageup, ctrl+b
+                        if self._cursor_line is not None:
+                            self._cursor_line = max(1, self._cursor_line - page)
+
+                    self._refresh_cursor_quiz()
+                    self._scroll_to_cursor_quiz()
+                    event.stop()
+                    return
+                except Exception:
+                    pass
+            elif event.key == "v":
+                if self._cursor_line is not None:
+                    if self._sel_start is None:
+                        self._sel_start = self._cursor_line
+                    else:
+                        self._sel_start = None
+                    self._refresh_cursor_quiz()
+                event.stop()
+                return
+            elif event.key == "escape":
+                self._sel_start = None
                 self._refresh_cursor_quiz()
                 event.stop()
                 return
-            except Exception:
-                pass
 
 
         # shift+enter or p: push file / range to chat

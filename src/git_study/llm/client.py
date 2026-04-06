@@ -33,7 +33,7 @@ def extract_json_block(text: str) -> str:
 class LLMClient:
     def __init__(self) -> None:
         settings = load_settings()
-        api_key, source = get_openai_api_key(settings.get("openai_api_key_mode"))
+        api_key, source = get_openai_api_key()
         if not api_key:
             raise ValueError(
                 "OpenAI API key is not configured. "

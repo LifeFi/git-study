@@ -27,6 +27,154 @@ _cmd_block_counter: int = 0
 _SPINNER_FRAMES = ["|", "/", "—", "\\"]
 
 
+def make_logo(v: str = "", size: str = "full") -> Text:
+    """플라스크 로고 반환. size: 'full' | 'small'.
+
+     full (5줄):
+         ○ ○
+        ○
+      ╭╯ ╰╮    git-study vX.X
+     ▐█████▌   AI writes. But do you?
+      ╰───╯
+
+     small (3줄):
+      º˚˚
+    ╭╯ ╰╮
+    ▐███▌
+    """
+    t = Text()
+    if size == "small":
+        t.append("     º˚˚\n", style="color(229)")
+        t.append("   ╭╯ ╰╮\n", style="color(245)")
+        t.append("   ▐", style="color(245)")
+        t.append("███", style="color(214)")
+        t.append("▌\n", style="color(245)")
+    else:  # full
+        t.append("        ○ ○\n", style="color(229)")
+        t.append("       ○\n", style="color(229)")
+        t.append("     ╭╯ ╰╮", style="color(245)")
+        t.append("    ")
+        t.append("git-study", style="bold white")
+        if v:
+            t.append(f" v{v}", style="dim")
+        t.append("\n")
+        t.append("    ▐", style="color(245)")
+        t.append("█████", style="color(214)")
+        t.append("▌", style="color(245)")
+        t.append("   ")
+        t.append("AI writes. But do you?\n", style="dim italic")
+        t.append("     ╰───╯\n", style="color(245)")
+    return t
+
+
+# SmallLogoAnimated 프레임: str — 12자 고정 폭 sky 1줄
+_SMALL_LOGO_FRAMES: list[str] = [
+    "     º˚˚    ",  # 。○˚
+    "     º˚˚    ",  # 대기
+    "     º˚˚    ",  # 대기
+    "      º˚    ",  # 드리프트
+    "       º    ",  # 드리프트
+    "            ",  # 소멸
+    "            ",  # 빈 하늘
+    "            ",  # 빈 하늘
+    "            ",  # 빈 하늘
+]
+
+
+class SmallLogoAnimated(Static):
+    """물방울 드리프트 애니메이션이 포함된 소형 플라스크 로고 위젯 (3줄 고정)."""
+
+    DEFAULT_CSS = """
+    SmallLogoAnimated {
+        height: 3;
+        width: auto;
+    }
+    """
+
+    def on_mount(self) -> None:
+        self._frame: int = 0
+        self.update(self._render_frame())
+        self.set_interval(0.18, self._tick)
+
+    def _tick(self) -> None:
+        self._frame = (self._frame + 1) % len(_SMALL_LOGO_FRAMES)
+        self.update(self._render_frame())
+
+    def _render_frame(self) -> Text:
+        t = Text(no_wrap=True)
+        t.append(f"{_SMALL_LOGO_FRAMES[self._frame]}\n", style="color(229)")
+        t.append("   ╭╯ ╰╮\n", style="color(245)")
+        t.append("   ▐", style="color(245)")
+        t.append("███", style="color(214)")
+        t.append("▌", style="color(245)")
+        return t
+
+
+# FullLogoAnimated 프레임: (sky1, sky2) — 각 22자 고정 폭
+_FULL_LOGO_FRAMES: list[tuple[str, str]] = [
+    ("        。 ○           ", "       。              "),  # 。○˚
+    # ("        。 ○           ", "       。              "),
+    ("         ○ 。           ", "        ○             "),
+    ("          。             ", "      。˚              "),
+    ("                      ", "       。              "),
+    ("                      ", "        ˚             "),
+    ("                      ", "                      "),
+    ("                      ", "                      "),
+]
+
+
+class FullLogoAnimated(Static):
+    """물방울 드리프트 애니메이션이 포함된 대형 플라스크 로고 위젯 (5줄 고정)."""
+
+    DEFAULT_CSS = """
+    FullLogoAnimated {
+        height: 5;
+        width: auto;
+    }
+    """
+
+    def __init__(self, v: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._v = v
+        self._frame: int = 0
+
+    def on_mount(self) -> None:
+        self.update(self._render_frame())
+        self._timer = self.set_interval(0.18, self._tick)
+
+    def pause_animation(self) -> None:
+        self._timer.pause()
+        # 물방울 없는 빈 하늘 프레임으로 고정
+        self._frame = len(_FULL_LOGO_FRAMES) - 1
+        self.update(self._render_frame())
+
+    def resume_animation(self) -> None:
+        self._timer.resume()
+
+    def _tick(self) -> None:
+        self._frame = (self._frame + 1) % len(_FULL_LOGO_FRAMES)
+        self.update(self._render_frame())
+
+    def _render_frame(self) -> Text:
+        s1, s2 = _FULL_LOGO_FRAMES[self._frame]
+        t = Text(no_wrap=True)
+        t.append(f"{s1}\n", style="color(229)")
+        t.append(f"{s2}\n", style="color(229)")
+        t.append("     ╭╯ ╰╮", style="color(245)")
+        t.append("    ")
+        t.append("git-study", style="bold white")
+        if self._v:
+            t.append(f" v{self._v}", style="dim")
+        t.append("\n")
+        t.append("    ▐", style="color(245)")
+        t.append("█████", style="color(214)")
+        t.append("▌", style="color(245)")
+        t.append("   ")
+        t.append("AI writes. But do you?\n", style="dim italic")
+        t.append("     ╰───╯\n", style="color(245)")
+        return t
+
+
 class LoadingRow(Widget):
     """스피너 애니메이션이 포함된 한 줄짜리 진행 상태 위젯."""
 
@@ -173,38 +321,11 @@ class HistoryView(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hv-content"):
+            yield FullLogoAnimated(v=_get_version())
             yield Static(self._welcome_text(), classes="hv-welcome")
 
-    def _logo(self, v: str) -> Text:
-        """로고 블록 — 교체 시 이 메서드만 수정.
-
-        현재: amber 포션 + 방울 3개
-
-            ○  ○
-               ○
-             ╭╯ ╰╮    git-study vX.X
-            ▐▒▒▒▒▒▌   AI writes. But do you?
-             ╰───╯
-        """
-        t = Text()
-        t.append("        ○ ○\n", style="color(229)")  # ⏺ ● ○
-        t.append("       ○\n", style="color(229)")
-        t.append("     ╭╯ ╰╮", style="color(245)")
-        t.append("    ")
-        t.append("git-study", style="bold white")
-        t.append(f" v{v}\n", style="dim")
-        t.append("    ▐", style="color(245)")
-        t.append("█████", style="color(214)")  # ▒▒▒▒▒ ▓▓▓▓▓ █████
-        t.append("▌", style="color(245)")
-        t.append("   ")
-        t.append("AI writes. But do you?\n", style="dim italic")
-        t.append("     ╰───╯\n", style="color(245)")
-        return t
-
     def _welcome_text(self) -> Text:
-        v = _get_version()
         t = Text()
-        t.append_text(self._logo(v))
         t.append("\n")
         t.append("  Step 1  ", style="dim")
         t.append("/commits", style="bold cyan")
@@ -285,10 +406,10 @@ class HistoryView(Widget):
         sep = Static(text, classes="hv-separator")
         container.mount(sep)
 
-    def append_user_message(self, text: str) -> Vertical:
+    def append_user_message(self, text: str, block_id: str | None = None) -> Vertical:
         """유저 채팅 메시지 블록 추가. 결과 붙일 block 반환."""
         container = self.query_one("#hv-content", Vertical)
-        block = Vertical(classes="hv-chat-block")
+        block = Vertical(id=block_id, classes="hv-chat-block")
         user_text = Text()
         user_text.append(f"{_CHEVRON} ", style="bold dim")
         user_text.append(text)
@@ -379,5 +500,5 @@ class HistoryView(Widget):
         """Clear all history entries (keep welcome)."""
         container = self.query_one("#hv-content", Vertical)
         for child in list(container.children):
-            if "hv-welcome" not in child.classes:
+            if "hv-welcome" not in child.classes and not isinstance(child, FullLogoAnimated):
                 child.remove()

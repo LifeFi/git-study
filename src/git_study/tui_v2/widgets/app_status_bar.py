@@ -52,6 +52,7 @@ class AppStatusBar(Widget):
     _quiz_progress: tuple[int, int] = (0, 0)
     _notification: str = ""
     _hook_installed: bool | None = None
+    _queue_label: str = ""
 
     def compose(self) -> ComposeResult:
         # yield Static(RichText("─" * 500, no_wrap=True), classes="asb-sep")
@@ -84,6 +85,10 @@ class AppStatusBar(Widget):
         self._hook_installed = installed
         self._refresh()
 
+    def set_queue(self, label: str) -> None:
+        self._queue_label = label
+        self._refresh()
+
     def set_notification(self, text: str) -> None:
         self._notification = text
         self._refresh()
@@ -105,11 +110,11 @@ class AppStatusBar(Widget):
                 t.append_text(sep)
                 if self._oldest_sha == self._newest_sha:
                     t.append(self._oldest_sha[:7], style="bold color(214)")
-                    t.append(f" ({self._commit_count})", style="dim")
                 else:
                     t.append(self._oldest_sha[:7], style="bold color(214)")
                     t.append("..", style="dim")
                     t.append(self._newest_sha[:7], style="bold color(214)")
+                if self._commit_count > 0:
                     t.append(f" ({self._commit_count})", style="dim")
 
             if self._hook_installed is not None:
@@ -130,11 +135,18 @@ class AppStatusBar(Widget):
             }
             mode_label = mode_labels.get(self._mode, self._mode.upper())
             current, total = self._quiz_progress
+            active_modes = {"quiz_loading", "grading", "reviewing", "chatting"}
             if total > 0 and self._mode == "quiz_answering":
                 mode_label = f"{mode_label} Q{current}/{total}"
                 t.append(mode_label, style="color(214)")
+            elif self._mode in active_modes:
+                t.append(mode_label, style="bold bright_yellow")
             else:
                 t.append(mode_label, style="dim")
+
+            if self._queue_label:
+                t.append_text(sep)
+                t.append(self._queue_label, style="bold color(214)")
 
             widget.update(t)
 
