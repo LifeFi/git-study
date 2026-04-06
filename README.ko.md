@@ -2,11 +2,11 @@
 
 # git-study
 
-![git-study 데모](assets/demo_hq.gif)
-
 > Git 커밋을 읽고, **코드 이해 퀴즈**로 만들어주는 터미널 학습 도구.
 
 왜 이렇게 바뀌었는지, 어떤 트레이드오프인지 — diff만 봐서는 설명하기 어려운 것들을 물어봅니다.
+
+![git-study 데모](assets/demo_hq.gif)
 
 ---
 
@@ -72,35 +72,35 @@ git-study               # 실행
 
 ## 명령어
 
-| 명령어 | 설명 |
-|--------|------|
-| `/commits` | 커밋 범위 선택 |
-| `/quiz [범위] [개수] [--ai\|--others]` | 퀴즈 생성 |
-| `/quiz list` | 세션별 퀴즈 목록 |
-| `/quiz clear` | 현재 범위 퀴즈 삭제 |
-| `/quiz retry` | 답변만 초기화 후 다시 풀기 |
-| `/grade` | 채점 |
-| `/answer` | 마지막 질문으로 답변 재진입 |
-| `/review [범위]` | 커밋 해설 |
-| `/map [--full] [--refresh]` | 저장소 구조 맵 |
-| `/clear` | 대화 초기화 |
-| `/resume` | 이전 대화 불러오기 |
-| `/repo [경로\|URL]` | 저장소 전환 |
-| `/apikey` | API 키 관리 |
-| `/model <id>` | 모델 변경 |
-| `/hook on\|off` | git post-commit 훅 설치/해제 |
-| `/exit` | 종료 |
-| `?` | 도움말 |
+| 명령어                                 | 설명                         |
+| -------------------------------------- | ---------------------------- |
+| `/commits`                             | 커밋 범위 선택               |
+| `/quiz [범위] [개수] [--ai\|--others]` | 퀴즈 생성                    |
+| `/quiz list`                           | 세션별 퀴즈 목록             |
+| `/quiz clear`                          | 현재 범위 퀴즈 삭제          |
+| `/quiz retry`                          | 답변만 초기화 후 다시 풀기   |
+| `/grade`                               | 채점                         |
+| `/answer`                              | 마지막 질문으로 답변 재진입  |
+| `/review [범위]`                       | 커밋 해설                    |
+| `/map [--full] [--refresh]`            | 저장소 구조 맵               |
+| `/clear`                               | 대화 초기화                  |
+| `/resume`                              | 이전 대화 불러오기           |
+| `/repo [경로\|URL]`                    | 저장소 전환                  |
+| `/apikey`                              | API 키 관리                  |
+| `/model <id>`                          | 모델 변경                    |
+| `/hook on\|off`                        | git post-commit 훅 설치/해제 |
+| `/exit`                                | 종료                         |
+| `?`                                    | 도움말                       |
 
 ---
 
 ## 저장 위치
 
-| 경로 | 내용 |
-|------|------|
-| `<repo>/.git-study/state.json` | 선택된 커밋 범위 |
-| `<repo>/.git-study/sessions/` | 퀴즈 세션 (질문·답변·채점) |
-| `~/.git-study/settings.json` | 전역 설정 |
-| `~/.git-study/secrets.json` | API 키 |
+| 경로                           | 내용                       |
+| ------------------------------ | -------------------------- |
+| `<repo>/.git-study/state.json` | 선택된 커밋 범위           |
+| `<repo>/.git-study/sessions/`  | 퀴즈 세션 (질문·답변·채점) |
+| `~/.git-study/settings.json`   | 전역 설정                  |
+| `~/.git-study/secrets.json`    | API 키                     |
 
 GitHub URL 또는 저장소 외부 실행 시 `~/.git-study/`에 저장됩니다.
