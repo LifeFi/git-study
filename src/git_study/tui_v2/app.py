@@ -68,7 +68,7 @@ from .widgets.history_view import FullLogoAnimated, HistoryView, LoadingRow
 from .widgets.inline_code_view import InlineCodeView, InlineQuizBlock
 
 
-_EXIT_MESSAGE = "\n학습 완료. 변경사항을 두뇌에 커밋했습니다. 👋\n"
+_EXIT_MESSAGE = "\n[brain/main] HEAD~1 보다 이해가 넓어졌습니다.\n"
 
 
 class GitStudyAppV2(App):
