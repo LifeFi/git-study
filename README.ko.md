@@ -2,7 +2,7 @@
 
 # git-study
 
-![git-study 데모](assets/demo.gif)
+![git-study 데모](assets/demo_hq.gif)
 
 > Git 커밋을 읽고, **코드 이해 퀴즈**로 만들어주는 터미널 학습 도구.
 

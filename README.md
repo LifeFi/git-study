@@ -2,7 +2,7 @@ English | [한국어](README.ko.md)
 
 # git-study
 
-![git-study demo](assets/demo.gif)
+![git-study demo](assets/demo_hq.gif)
 
 > A terminal learning tool that turns Git commits into **code comprehension quizzes**.
 
