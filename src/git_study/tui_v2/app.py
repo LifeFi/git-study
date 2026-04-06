@@ -3938,7 +3938,7 @@ def _build_hook_block(repo_path: Path, terminal: str = "auto") -> str:
     as_path = str(repo_path).replace('"', '\\"')
     # shell 단일따옴표 문자열 내부용: ' → '\''
     as_path_shell = as_path.replace("'", "'\\''")
-    shell_cmd = f'cd \\"{as_path_shell}\\" && git-study-v2 --auto-quiz HEAD'
+    shell_cmd = f'cd \\"{as_path_shell}\\" && git-study --auto-quiz HEAD'
 
     if terminal.lower() in ("", "auto"):
         # 실행 시점에 현재 떠 있는 터미널 자동 감지
@@ -3963,7 +3963,7 @@ def _build_hook_block(repo_path: Path, terminal: str = "auto") -> str:
         f"if command -v osascript > /dev/null 2>&1; then\n"
         f"{mac_block}\n"
         f"else\n"
-        f'  [ -t 1 ] && git-study-v2 --auto-quiz HEAD "{as_path}"\n'
+        f'  [ -t 1 ] && git-study --auto-quiz HEAD "{as_path}"\n'
         f"fi\n"
         f"{_HOOK_END}\n"
     )
