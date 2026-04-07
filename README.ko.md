@@ -47,15 +47,20 @@ uv tool install \
   git-study
 ```
 
-**Step 3. API 키 설정 (처음 한 번만)**
+**Step 3. 실행**
 
 ```bash
 cd /path/to/your/repo   # .git 폴더가 있는 프로젝트 루트로 이동
 git-study               # 실행
+```
+
+**Step 4. API 키 설정 (처음 한 번만)**
+
+```bash
 /apikey set sk-...      # 앱 안에서 입력 (영구 저장)
 ```
 
-**Step 4. 학습 시작**
+**Step 5. 학습 시작**
 
 ```
 /commits      # 커밋 범위 선택
@@ -82,15 +87,24 @@ git-study               # 실행
 | `/grade`                               | 채점                         |
 | `/answer`                              | 마지막 질문으로 답변 재진입  |
 | `/review [범위]`                       | 커밋 해설                    |
-| `/map [--full] [--refresh]`            | 저장소 구조 맵               |
+| `/map [--refresh]`                     | 저장소 구조 맵               |
 | `/clear`                               | 대화 초기화                  |
 | `/resume`                              | 이전 대화 불러오기           |
 | `/repo [경로\|URL]`                    | 저장소 전환                  |
 | `/apikey`                              | API 키 관리                  |
 | `/model <id>`                          | 모델 변경                    |
 | `/hook on\|off`                        | git post-commit 훅 설치/해제 |
+| `/help`                                | 도움말                       |
 | `/exit`                                | 종료                         |
-| `?`                                    | 도움말                       |
+
+---
+
+## 단축키
+
+| 키                     | 동작                       |
+| ---------------------- | -------------------------- |
+| `Shift+Tab`            | 대화창 ↔ 코드뷰 전환       |
+| `Shift+↑` / `Shift+↓` | 이전 / 다음 퀴즈 문항 이동 |
 
 ---
 

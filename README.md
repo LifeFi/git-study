@@ -47,15 +47,20 @@ uv tool install \
   git-study
 ```
 
-**Step 3. Set your API key (once)**
+**Step 3. Run**
 
 ```bash
 cd /path/to/your/repo   # go to your project root (where .git lives)
 git-study               # launch the app
+```
+
+**Step 4. Set your API key (once)**
+
+```bash
 /apikey set sk-...      # enter inside the app (saved permanently)
 ```
 
-**Step 4. Start learning**
+**Step 5. Start learning**
 
 ```
 /commits      # select commit range
@@ -82,15 +87,24 @@ Use `Shift+Tab` to switch between chat and code view.
 | `/grade`                                 | Grade answers                                       |
 | `/answer`                                | Re-enter answer mode for last question              |
 | `/review [range]`                        | Explain commits                                     |
-| `/map [--full] [--refresh]`              | Repository structure map                            |
+| `/map [--refresh]`                       | Repository structure map                            |
 | `/clear`                                 | Reset conversation                                  |
 | `/resume`                                | Resume previous conversation                        |
 | `/repo [path\|URL]`                      | Switch repository                                   |
 | `/apikey`                                | Manage API key                                      |
 | `/model <id>`                            | Change model                                        |
 | `/hook on\|off`                          | Install/uninstall git post-commit hook              |
+| `/help`                                  | Help                                                |
 | `/exit`                                  | Quit                                                |
-| `?`                                      | Help                                                |
+
+---
+
+## Keyboard Shortcuts
+
+| Key                    | Action                        |
+| ---------------------- | ----------------------------- |
+| `Shift+Tab`            | Toggle chat ↔ code view       |
+| `Shift+↑` / `Shift+↓` | Previous / next quiz question |
 
 ---
 
