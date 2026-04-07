@@ -257,6 +257,7 @@ class HistoryView(Widget):
 
     HistoryView .hv-cmd-block {
         height: auto;
+        margin-top: 1;
         margin-bottom: 1;
     }
 

@@ -6,8 +6,10 @@ from typing import Literal
 
 CommandKind = Literal["quiz", "quiz_clear", "quiz_retry", "quiz_list", "grade", "review", "map", "help", "commits", "answer", "exit", "repo", "apikey", "model", "clear", "resume", "hook", "chat", "unknown"]
 
-# @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태)
-_MENTION_RE = re.compile(r'@([^\[\s]+)(?:\[(\d+)-(\d+)\])?')
+# @foo.py[43-80] 또는 @foo.py (라인 범위 없는 형태). 순수 숫자(@1)는 퀴즈 참조로 분리.
+_MENTION_RE = re.compile(r'@([^\d\[\s][^\[\s]*)(?:\[(\d+)-(\d+)\])?')
+# @1 @2 등 퀴즈 번호 참조
+_QUIZ_MENTION_RE = re.compile(r'@(\d+)(?!\w)')
 _MODEL_RE = re.compile(r'--model(?:=|\s+)(\S+)')
 
 
@@ -24,6 +26,8 @@ class ParsedCommand:
     mentioned_files: tuple = ()
     # tuple of (file_path: str, start_line: int, end_line: int)
     # end_line=0 means entire file
+    mentioned_quizzes: tuple = ()
+    # tuple of int — 1-based quiz indices referenced via @n syntax
     quiz_count: int = QUIZ_COUNT_DEFAULT
     author_context: str = "self"  # "self" | "others" | "ai"
     refresh: bool = False
@@ -120,9 +124,10 @@ def parse_command(text: str) -> ParsedCommand:
         parts = text.split(None, 1)
         return ParsedCommand(kind="hook", range_arg=parts[1] if len(parts) > 1 else "", raw=text)
     if text and not text.startswith("/"):
+        quiz_mentions = tuple(int(m.group(1)) for m in _QUIZ_MENTION_RE.finditer(text))
         mentions = tuple(
             (m.group(1), int(m.group(2) or 0), int(m.group(3) or 0))
             for m in _MENTION_RE.finditer(text)
         )
-        return ParsedCommand(kind="chat", range_arg=text, raw=text, mentioned_files=mentions)
+        return ParsedCommand(kind="chat", range_arg=text, raw=text, mentioned_files=mentions, mentioned_quizzes=quiz_mentions)
     return ParsedCommand(kind="unknown", raw=text)

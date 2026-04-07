@@ -798,6 +798,7 @@ class InlineQuizBlock(Widget):
             "[bold cyan]Enter[/bold cyan] 답변 입력  "
             "[bold cyan]Shift+Enter[/bold cyan] 줄바꿈  "
             "[bold cyan]Shift+↑↓[/bold cyan] 이동  "
+            "[bold cyan]F1[/bold cyan] 힌트  "
             "[dim]Esc 종료[/dim]",
             classes="iqb-hint",
         )
@@ -1319,7 +1320,7 @@ class InlineCodeView(Widget):
         grades: list[InlineQuizGrade],
         known_files: dict[str, str],
         current_index: int = 0,
-        focus_answer: bool = True,
+        focus_answer: bool = False,
     ) -> None:
         """Load quiz questions and embed them in the code view."""
         self._focus_answer_on_load = focus_answer
@@ -1589,13 +1590,6 @@ class InlineCodeView(Widget):
             code_pane.display = True
 
         self._update_ruler(total_rows, diff_markers)
-        # 코드 파일 렌더링 후 #code-pane 포커스 → 키보드 커서 이동 즉시 활성화
-        try:
-            pane = self.query_one("#code-pane", CodePane)
-            if pane.display:
-                pane.focus()
-        except Exception:
-            pass
 
     def _refresh_cursor_quiz(self) -> None:
         """퀴즈 모드: 커서/선택 영역이 속한 세그먼트 업데이트."""
@@ -2186,10 +2180,12 @@ class InlineCodeView(Widget):
                 event.stop()
                 return
             elif event.key == "escape":
-                self._sel_start = None
-                self._refresh_cursor_quiz()
-                event.stop()
-                return
+                if self._sel_start is not None:
+                    self._sel_start = None
+                    self._refresh_cursor_quiz()
+                    event.stop()
+                    return
+                # 비주얼 선택 없음 → 버블링으로 app.action_escape_to_cmdbar 처리
 
 
         # shift+enter or p: push file / range to chat

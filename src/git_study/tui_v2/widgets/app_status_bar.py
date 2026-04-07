@@ -137,7 +137,7 @@ class AppStatusBar(Widget):
             current, total = self._quiz_progress
             active_modes = {"quiz_loading", "grading", "reviewing", "chatting"}
             if total > 0 and self._mode == "quiz_answering":
-                mode_label = f"{mode_label} Q{current}/{total}"
+                mode_label = f"{mode_label} {current}/{total}"
                 t.append(mode_label, style="color(214)")
             elif self._mode in active_modes:
                 t.append(mode_label, style="bold bright_yellow")

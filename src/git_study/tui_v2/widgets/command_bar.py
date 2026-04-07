@@ -2,6 +2,8 @@
 
 import unicodedata
 
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -9,6 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.message import Message
 from textual.reactive import reactive
+from textual.strip import Strip
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Static, TextArea
@@ -26,9 +29,9 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/clear", "대화 초기화"),
     ("/resume", "이전 대화 불러오기"),
     ("/repo", "저장소 전환 (URL 또는 경로)"),
-    ("/apikey", "API key 관리 — /apikey 뒤에 스페이스로 목록"),
-    ("/model", "모델 변경 — /model 뒤에 스페이스로 목록"),
-    ("/hook", "post-commit hook 관리 — /hook 뒤에 스페이스로 on/off 선택"),
+    ("/apikey ", "API key 관리 — /apikey 뒤에 스페이스로 목록"),
+    ("/model ", "모델 변경 — /model 뒤에 스페이스로 목록"),
+    ("/hook ", "post-commit hook 관리 — /hook 뒤에 스페이스로 on/off 선택"),
     ("/help", "도움말"),
     ("/exit", "종료 (quit, Ctrl+Q 가능)"),
 ]
@@ -112,6 +115,24 @@ class CommandInput(TextArea):
     ]
 
     _programmatic: bool = False
+    ghost_text: str = ""
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        if not self.ghost_text:
+            return strip
+        scroll_y = int(self.scroll_y)
+        doc_line = scroll_y + y
+        last_doc_line = max(0, self.document.line_count - 1)
+        if doc_line != last_doc_line:
+            return strip
+        # 커서 위치까지만 잘라내고 ghost text를 그 뒤에 이어붙임
+        cursor_col = self.cursor_location[1]
+        left = strip.crop(0, cursor_col + 1)
+        available = strip.cell_length - left.cell_length
+        if available <= 1:
+            return strip
+        return Strip([*left._segments, Segment(self.ghost_text, Style(color="grey35"))])
 
     @property
     def value(self) -> str:
@@ -164,6 +185,8 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
         except Exception:
             current = DEFAULT_MODEL
         results = []
+        if not query:
+            results.append(("/model", "현재 모델 확인"))
         for model in SUGGESTED_MODELS:
             if not query or model.lower().startswith(query):
                 desc = _MODEL_DESCRIPTIONS.get(model, "")
@@ -231,7 +254,8 @@ class CommandBar(Widget):
     }
 
     CommandBar #cb-status-row {
-        height: 3;
+        height: auto;
+        min-height: 3;
         border-top: solid white 70%;
     }
 
@@ -239,9 +263,7 @@ class CommandBar(Widget):
         width: auto;
         height: 1;
         margin: 0 0 0 1;
-        padding: 0 1;
-        background: rgb(30,160,60);
-        color: white;
+        background: transparent;
         content-align: left middle;
         display: none;
     }
@@ -345,6 +367,7 @@ class CommandBar(Widget):
     _showing_help: bool
     _mention_files: list[str]  # App이 주입하는 파일 목록 (@-mention 자동완성용)
     _mention_changed_files: set[str]  # diff 범위 변경 파일 셋 (초록 표시용)
+    _quiz_questions: list[str]  # 퀴즈 질문 텍스트 목록 (@n 자동완성용)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -359,13 +382,17 @@ class CommandBar(Widget):
         self._showing_help = False
         self._mention_files = []
         self._mention_changed_files = set()
+        self._quiz_questions = []
+        self._at_prefix = ""  # 중간 @ 자동완성 시 @ 앞쪽 텍스트 보존용
         self._status_timer: Timer | None = None
         self._context_hint: str = self._DEFAULT_HINT
         self._dismissable: bool = False
         self._alert_timer: Timer | None = None
         self._alert_step: int = 0
-        self._alert_text: str = ""
-        self._warning_text: str = ""
+        self._alert_flag: str = ""
+        self._alert_hint: str = ""
+        self._warning_flag: str = ""
+        self._warning_hint: str = ""
         self._progress_map: dict[str, str] = {}
         self._progress_timer: Timer | None = None
         self._progress_spinner_idx: int = 0
@@ -416,11 +443,12 @@ class CommandBar(Widget):
         self.status_text = text
         self._context_hint = self._DEFAULT_HINT
 
-    def set_quiz_alert(self, text: str) -> None:
+    def set_quiz_alert(self, flag: str, hint: str = "") -> None:
         """알림 영역에 스피너+색상 애니메이션과 함께 텍스트를 표시."""
-        if self._warning_text:
-            return  # API key 경고가 우선 — 키 없으면 퀴즈 기능 불가
-        self._alert_text = text
+        if self._warning_flag:
+            return  # 경고가 우선 — 경고 중엔 퀴즈 알림 표시 안함
+        self._alert_flag = flag
+        self._alert_hint = hint
         try:
             self.query_one("#cb-alert", Static).display = True
         except Exception:
@@ -434,26 +462,28 @@ class CommandBar(Widget):
         if self._alert_timer is not None:
             self._alert_timer.stop()
             self._alert_timer = None
-        self._alert_text = ""
+        self._alert_flag = ""
+        self._alert_hint = ""
         try:
             w = self.query_one("#cb-alert", Static)
             w.update("")
             w.display = False
-            w.styles.background = self._ALERT_COLORS[0]
         except Exception:
             pass
-        if self._warning_text:
+        if self._warning_flag:
             self._show_warning()
 
-    def set_warning_alert(self, text: str) -> None:
-        """API key 미설정 등 정적 경고를 cb-alert에 표시."""
-        self._warning_text = text
+    def set_warning_alert(self, flag: str, hint: str = "") -> None:
+        """정적 경고를 cb-alert에 표시. quiz alert보다 우선."""
+        self._warning_flag = flag
+        self._warning_hint = hint
         if self._alert_timer is None:
             self._show_warning()
 
     def clear_warning_alert(self) -> None:
         """정적 경고 제거. quiz alert가 없으면 cb-alert를 숨긴다."""
-        self._warning_text = ""
+        self._warning_flag = ""
+        self._warning_hint = ""
         if self._alert_timer is None:
             try:
                 w = self.query_one("#cb-alert", Static)
@@ -462,15 +492,23 @@ class CommandBar(Widget):
             except Exception:
                 pass
 
+    def _build_alert(self, icon: str, flag: str, hint: str, color: str) -> Text:
+        """flag+hint 구조의 Rich Text 알림을 생성한다."""
+        t = Text(no_wrap=True, overflow="ellipsis")
+        t.append(f" {icon} {flag} ", style=f"bold white on {color}")
+        if hint:
+            t.append(f"  {hint} │", style=color)
+        return t
+
     def _show_warning(self) -> None:
         try:
             w = self.query_one("#cb-alert", Static)
             w.display = True
-            w.update(f"⚠ {self._warning_text}")
-        except Exception:
-            pass
-        try:
-            self.query_one("#cb-alert", Static).styles.background = "#cc5500"
+            w.update(
+                self._build_alert(
+                    "⚠", self._warning_flag, self._warning_hint, "#cc5500"
+                )
+            )
         except Exception:
             pass
 
@@ -479,11 +517,12 @@ class CommandBar(Widget):
         try:
             w = self.query_one("#cb-alert", Static)
             spinner = self._ALERT_SPINNER[self._alert_step % len(self._ALERT_SPINNER)]
-            w.update(f"{spinner} {self._alert_text}")
             color = self._ALERT_COLORS[
                 (self._alert_step // 10) % len(self._ALERT_COLORS)
             ]
-            w.styles.background = color
+            w.update(
+                self._build_alert(spinner, self._alert_flag, self._alert_hint, color)
+            )
             self._alert_step += 1
         except Exception:
             pass
@@ -504,7 +543,9 @@ class CommandBar(Widget):
                 pass
             if self._progress_timer is None:
                 self._progress_spinner_idx = 0
-                self._progress_timer = self.set_interval(0.1, self._tick_progress_spinner)
+                self._progress_timer = self.set_interval(
+                    0.1, self._tick_progress_spinner
+                )
         else:
             if self._progress_timer is not None:
                 self._progress_timer.stop()
@@ -519,7 +560,9 @@ class CommandBar(Widget):
     def _tick_progress_spinner(self) -> None:
         if not self._progress_map:
             return
-        frame = self._ALERT_SPINNER[self._progress_spinner_idx % len(self._ALERT_SPINNER)]
+        frame = self._ALERT_SPINNER[
+            self._progress_spinner_idx % len(self._ALERT_SPINNER)
+        ]
         self._progress_spinner_idx += 1
         items = [f"{frame} {msg}" for msg in self._progress_map.values()]
         try:
@@ -538,6 +581,7 @@ class CommandBar(Widget):
         zone: str,
         quiz_count: int = 0,
         answered_count: int = 0,
+        graded: bool = False,
     ) -> None:
         """포커스 존과 퀴즈 상태에 따라 컨텍스트 힌트를 갱신한다.
 
@@ -562,12 +606,16 @@ class CommandBar(Widget):
             if has_quiz:
                 hint += "  │  Shift+↑↓: 문제 이동"
         elif zone == "command_bar_chat":
-            if has_quiz:
+            if graded:
+                hint = "다시 풀어보기 /quiz retry  │  새로운 커밋 공부 /commits"
+            elif has_quiz:
                 hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
             else:
                 hint = self._DEFAULT_HINT
         else:  # command_bar_code
-            if has_quiz:
+            if graded:
+                hint = "다시 풀어보기 /quiz retry  │  새로운 커밋 공부 /commits"
+            elif has_quiz:
                 hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
             else:
                 hint = self._DEFAULT_HINT
@@ -584,6 +632,10 @@ class CommandBar(Widget):
 
     def focus_input(self) -> None:
         self.query_one("#cb-input", CommandInput).focus()
+
+    def set_quiz_questions(self, questions: list[str]) -> None:
+        """퀴즈 질문 텍스트 목록 주입. @n 자동완성에 사용."""
+        self._quiz_questions = list(questions)
 
     def set_mention_files(self, paths: list[str]) -> None:
         """App이 현재 커밋 파일 목록을 주입. @-mention 자동완성에 사용."""
@@ -610,12 +662,64 @@ class CommandBar(Widget):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Input placeholder hint
+    # ------------------------------------------------------------------
+
+    _INPUT_HINTS: dict[str, str] = {
+        "/quiz":   "[숫자]  HEAD | HEAD~N | A..B  [--ai|--others]",
+        "/review": "HEAD | HEAD~N | A..B",
+        "/model":  "<모델명>  (스페이스로 목록 확인)",
+        "/hook":   "on | off",
+        "/apikey": "set <key> | unset",
+        "/repo":   "<경로 또는 URL>  (생략 시 선택창)",
+        "/map":    "--refresh",
+    }
+
+    def _get_input_hint(self, text: str) -> str:
+        """입력된 커맨드에 따라 인자 힌트를 반환. 공백/인자가 있으면 빈 문자열."""
+        if not text or " " in text or "\n" in text:
+            return ""
+        return self._INPUT_HINTS.get(text.strip(), "")
+
+    def _update_input_hint(self, text: str) -> None:
+        hint = self._get_input_hint(text)
+        try:
+            inp = self.query_one("#cb-input", CommandInput)
+            inp.ghost_text = f"  {hint}" if hint else ""
+            inp.refresh()
+        except Exception:
+            pass
+
     def _get_ac_candidates(self, text: str) -> list[tuple[str, str]]:
         """입력 텍스트에 따라 자동완성 후보 반환 (/ 명령어 또는 @ 멘션)."""
+        # @ 트리거: 텍스트 시작 또는 중간에서 공백 없는 마지막 @ 세그먼트 감지
+        at_idx = text.rfind("@")
+        if at_idx >= 0:
+            after_at = text[at_idx + 1:]
+            # 공백/줄바꿈이 없으면 아직 입력 중인 @ mention
+            if " " not in after_at and "\n" not in after_at:
+                self._at_prefix = text[:at_idx]
+                return self._get_mention_candidates("@" + after_at)
+        self._at_prefix = ""
+        return _filter_slash_candidates(text)
+
+    def _get_mention_candidates(self, text: str) -> list[tuple[str, str]]:
+        """@ mention 후보 반환. text는 '@...' 형태."""
         if text.startswith("@"):
             query = text[1:]
             if "[" in query:
                 return []
+
+            # 퀴즈 번호 후보 (@숫자): 파일 후보보다 먼저 표시
+            quiz_results: list[tuple[str, str]] = []
+            if not query or query.isdigit():
+                for i, q_text in enumerate(self._quiz_questions, 1):
+                    if query and not str(i).startswith(query):
+                        continue
+                    preview = q_text[:28] + "…" if len(q_text) > 28 else q_text
+                    quiz_results.append((f"@{i} ", f"퀴즈 #{i} — {preview}"))
+
             # 캐시된 파일 목록 없으면 code view에서 직접 가져오기 (fallback)
             mention_files = self._mention_files
             if not mention_files:
@@ -682,8 +786,8 @@ class CommandBar(Widget):
 
             # 폴더(/) 먼저, 그 다음 파일
             results.sort(key=lambda x: (0 if x[0].endswith("/") else 1, x[0]))
-            return results
-        return _filter_slash_candidates(text)
+            return quiz_results + results
+        return []
 
     def action_prev_question(self) -> None:
         self.post_message(self.PrevQuestion())
@@ -697,7 +801,7 @@ class CommandBar(Widget):
             self._close_autocomplete()
             inp = self.query_one("#cb-input", CommandInput)
             if cmd.startswith("@"):
-                inp.value = cmd
+                inp.value = self._at_prefix + cmd
                 inp.cursor_position = len(inp.value)
             else:
                 inp.value = cmd
@@ -845,8 +949,9 @@ class CommandBar(Widget):
             # 입력만 모드: 후행 공백으로 끝나는 후보는 입력창에만 채우고 실행 안 함
             if cmd.endswith(" "):
                 inp = self.query_one("#cb-input", CommandInput)
-                inp.value = cmd
-                inp.cursor_position = len(cmd)
+                full = self._at_prefix + cmd if cmd.startswith("@") else cmd
+                inp.value = full
+                inp.cursor_position = len(full)
                 return
 
             text = cmd.strip()
@@ -856,11 +961,11 @@ class CommandBar(Widget):
                 try:
                     inp = self.query_one("#cb-input", CommandInput)
                     if text.endswith("/"):
-                        # 폴더 선택: @dir/ 채우고 on_command_input_changed가 자동완성 재트리거
-                        inp.value = text
+                        # 폴더 선택: prefix + @dir/ 채우고 자동완성 재트리거
+                        inp.value = self._at_prefix + text
                     else:
-                        # 파일 선택: @file.py 채우기
-                        inp.value = text
+                        # 파일/퀴즈 선택: prefix + @... 채우기
+                        inp.value = self._at_prefix + text
                     inp.cursor_position = len(inp.value)
                 except Exception:
                     pass
@@ -911,6 +1016,7 @@ class CommandBar(Widget):
             self._open_autocomplete(candidates, 0)
         else:
             self._close_autocomplete()
+        self._update_input_hint(value)
 
     def on_command_input_submitted(self, event: CommandInput.Submitted) -> None:
         if self._ac_candidates:

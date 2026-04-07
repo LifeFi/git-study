@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -58,6 +61,7 @@ from ..tui.state import (
 )
 from ..services.chat_service import stream_chat
 from ..types import InlineQuizGrade, InlineQuizQuestion
+from ..update_checker import format_as_box, format_as_toast, get_update_messages
 
 from .commands import parse_command
 from .screens import CommitPickerScreen, QuizListScreen, RepoPickerScreen, ThreadPickerScreen
@@ -67,8 +71,6 @@ from .widgets.command_bar import CommandBar
 from .widgets.history_view import FullLogoAnimated, HistoryView, LoadingRow
 from .widgets.inline_code_view import InlineCodeView, InlineQuizBlock
 
-
-_EXIT_MESSAGE = "\n[brain/main] HEAD~1 보다 이해가 넓어졌습니다.\n"
 
 
 class GitStudyAppV2(App):
@@ -164,6 +166,7 @@ class GitStudyAppV2(App):
         Binding("shift+tab", "toggle_view", "Chat/Code", priority=True),
         Binding("shift+up", "prev_question", priority=True),
         Binding("shift+down", "next_question", priority=True),
+        Binding("f1", "quiz_hint", priority=True),
         Binding("pageup", "chat_scroll_page_up", priority=True),
         Binding("pagedown", "chat_scroll_page_down", priority=True),
         Binding("escape", "escape_to_cmdbar"),  # 위젯 ESC보다 낮은 우선순위
@@ -193,6 +196,9 @@ class GitStudyAppV2(App):
         self._grading_summary: dict = {}
         self._known_files: dict[str, str] = {}
         self._current_q_index: int = 0
+        self._quiz_retried: bool = False
+        self._graded_this_session: bool = False
+        self._map_or_review_done: bool = False
         self._mode: str = (
             "idle"  # idle | quiz_loading | quiz_answering | grading | reviewing | chatting
         )
@@ -217,6 +223,9 @@ class GitStudyAppV2(App):
         # 액션 큐
         self._action_queue: list = []  # list of ParsedCommand
         self._action_queue_block_id: str | None = None
+        self._update_messages: list[tuple[str, str]] = []
+        self._stop_event: threading.Event = threading.Event()
+        self._exit_printed: threading.Event = threading.Event()
 
     # ------------------------------------------------------------------
     # Compose
@@ -264,10 +273,38 @@ class GitStudyAppV2(App):
         cmd_bar.focus_input()
         api_key, _ = get_openai_api_key()
         if not api_key:
-            cmd_bar.set_warning_alert(
-                "OPENAI_API_KEY 미설정 — /apikey set KEY 로 등록하세요"
-            )
+            cmd_bar.set_warning_alert("API키 미설정", "/apikey set KEY 로 등록")
         self._sync_logo_animation()
+        self._check_for_updates()
+
+    @work(thread=True)
+    def _check_for_updates(self) -> None:
+        """백그라운드에서 업데이트 버전 체크 후 토스트 알림 표시 및 종료 메시지에 추가."""
+        updates = get_update_messages()
+        if updates:
+            self._update_messages = updates
+            for title, command in updates:
+                self.call_from_thread(
+                    self.notify, format_as_toast(title, command), severity="warning", timeout=15
+                )
+
+    def _build_exit_message(self) -> str:
+        """종료 메시지 + 업데이트 안내를 합쳐 반환."""
+        if self._quiz_retried:
+            phrase = "이해가 단단해졌습니다."
+        elif self._graded_this_session and self._map_or_review_done:
+            phrase = "이해가 넓고 깊어졌습니다."
+        elif self._graded_this_session:
+            phrase = "이해가 깊어졌습니다."
+        else:
+            phrase = "FOMO가 완화되었습니다."
+        msg = f"\n[brain/main] HEAD~1 보다 {phrase}\n"
+        if self._update_messages:
+            boxed = "\n".join(
+                format_as_box(title, command) for title, command in self._update_messages
+            )
+            msg += "\n" + boxed + "\n"
+        return msg
 
     def _on_scroll_wrapper_virtual_size_change(self) -> None:
         """콘텐츠(HistoryView)가 커질 때 scroll-wrapper를 맨 아래로 스크롤."""
@@ -315,7 +352,7 @@ class GitStudyAppV2(App):
 
         if focused is None:
             zone = "focus_lost"
-        elif focused.has_class("iqb-input"):
+        elif focused.has_class("iqb-input") and self._mode == "quiz_answering":
             # 퀴즈 답변창: 기존 _update_answer_status()가 더 상세한 힌트를 제공
             self._update_answer_status()
             self._sync_quiz_alert()
@@ -334,6 +371,7 @@ class GitStudyAppV2(App):
                 zone=zone,
                 quiz_count=quiz_count,
                 answered_count=answered_count,
+                graded=bool(self._grades),
             )
         except Exception:
             pass
@@ -601,6 +639,14 @@ class GitStudyAppV2(App):
 
         match cmd.kind:
             case "quiz":
+                if self._mode == "quiz_loading":
+                    self._set_status_timed("퀴즈 생성이 이미 진행 중입니다.", 3.0)
+                    self._append_result("퀴즈 생성이 이미 진행 중입니다.", "error")
+                    return
+                if self._mode == "grading":
+                    self._set_status_timed("채점이 진행 중입니다. 완료 후 시도하세요.", 3.0)
+                    self._append_result("채점이 진행 중입니다. 완료 후 시도하세요.", "error")
+                    return
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
                 )
@@ -643,6 +689,27 @@ class GitStudyAppV2(App):
             case "quiz_retry":
                 self._handle_quiz_retry()
             case "grade":
+                if self._mode == "grading":
+                    self._set_status_timed("채점이 이미 진행 중입니다.", 3.0)
+                    self._append_result("채점이 이미 진행 중입니다.", "error")
+                    return
+                if self._mode == "quiz_loading":
+                    self._set_status_timed("퀴즈 생성이 진행 중입니다. 완료 후 시도하세요.", 3.0)
+                    self._append_result("퀴즈 생성이 진행 중입니다. 완료 후 시도하세요.", "error")
+                    return
+                if self._mode == "quiz_answering":
+                    self._set_mode("idle")
+                    try:
+                        self.query_one(
+                            "#code-view", InlineCodeView
+                        )._refresh_quiz_blocks_state()
+                    except Exception:
+                        pass
+                    try:
+                        self.query_one("#cmd-bar", CommandBar).focus_input()
+                    except Exception:
+                        pass
+                self._set_mode("grading")
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
                 )
@@ -662,9 +729,11 @@ class GitStudyAppV2(App):
             case "model":
                 self._handle_model_command(cmd.range_arg)
             case "exit":
-                self.exit(_EXIT_MESSAGE)
+                self._stop_event.set()
+                self._schedule_force_exit()
+                self.exit(self._build_exit_message())
             case "chat":
-                self._start_chat(cmd.range_arg, mentioned_files=cmd.mentioned_files)
+                self._start_chat(cmd.range_arg, mentioned_files=cmd.mentioned_files, mentioned_quizzes=cmd.mentioned_quizzes)
             case "clear":
                 self._handle_clear()
             case "resume":
@@ -677,7 +746,7 @@ class GitStudyAppV2(App):
                         cmd.range_arg if cmd.range_arg != "on" else ""
                     )
             case _:
-                self._set_status_timed(f"알 수 없는 명령: {cmd.raw}", 5.0)
+                self._set_status_dismissable(f"알 수 없는 명령: {cmd.raw}  [dim]ESC 닫기[/dim]")
                 self._append_result(f"알 수 없는 명령: {cmd.raw}", "error")
 
     def on_inline_quiz_block_answer_submitted(
@@ -737,14 +806,11 @@ class GitStudyAppV2(App):
             except Exception:
                 pass
             return
-        # Tab 경로: focus_input()이 먼저 동기적으로 실행되어 self.focused가 이미 cb-input임.
-        # 이 경우 code-scroll로 탈취하지 않음. Esc/Shift+Tab 경로에서만 code-scroll로 이동.
-        focused = self.focused
-        if focused is None or focused.has_class("iqb-input"):
-            try:
-                self.query_one("#code-scroll").focus()
-            except Exception:
-                self.query_one("#cmd-bar", CommandBar).focus_input()
+        # ESC 경로: cmd-bar로 포커스 귀환
+        try:
+            self.query_one("#cmd-bar", CommandBar).focus_input()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Quiz block click
@@ -798,8 +864,29 @@ class GitStudyAppV2(App):
 
         self.call_after_refresh(_do_insert)
 
+    def _schedule_force_exit(self) -> None:
+        """asyncio executor 대기(최대 60s)를 우회하기 위해 데몬 스레드에서 강제 종료 예약.
+
+        - 정상 종료(스트리밍 없음): app.run()이 0.8s 내 반환 → run_v2()에서 print → 프로세스 종료
+          → _exit_printed가 set되므로 데몬 스레드는 print 없이 exit만 수행 (이미 죽어있음)
+        - 강제 종료(스트리밍 블로킹): asyncio가 shutdown_default_executor에서 60s 대기
+          → 0.8s 후 데몬 스레드가 exit message를 출력하고 os._exit(0)으로 즉시 종료
+        """
+        exit_msg = self._build_exit_message()
+
+        def _force():
+            time.sleep(0.8)
+            if not self._exit_printed.is_set():
+                if exit_msg:
+                    print(exit_msg)
+            os._exit(0)
+
+        threading.Thread(target=_force, daemon=True).start()
+
     def action_quit(self) -> None:
-        self.exit(_EXIT_MESSAGE)
+        self._stop_event.set()
+        self._schedule_force_exit()
+        self.exit(self._build_exit_message())
 
     def action_escape_to_cmdbar(self) -> None:
         """ESC: 어디서든 cmd-bar로 포커스 귀환.
@@ -841,6 +928,20 @@ class GitStudyAppV2(App):
         if in_quiz:
             self._current_q_index = (self._current_q_index + 1) % len(self._questions)
         self._resume_answer_mode()
+
+    def action_quiz_hint(self) -> None:
+        """F1: 현재 활성 퀴즈 번호를 @n 형태로 명령창에 채우고 포커스 이동."""
+        if not self._questions:
+            return
+        n = self._current_q_index + 1
+        try:
+            cb = self.query_one("#cmd-bar", CommandBar)
+            inp = cb.query_one("#cb-input")
+            inp.value = f"@{n} "
+            inp.cursor_position = len(inp.value)
+            cb.focus_input()
+        except Exception:
+            pass
 
     def on_command_bar_prev_question(self, event: CommandBar.PrevQuestion) -> None:
         self.action_prev_question()
@@ -1150,6 +1251,8 @@ class GitStudyAppV2(App):
                 author_context=author_context,
                 model_override=model_override,
             ):
+                if self._stop_event.is_set():
+                    return
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
                     self.call_from_thread(
@@ -1222,6 +1325,11 @@ class GitStudyAppV2(App):
         self._grading_summary = {}
         self._known_files = known_files
         self._current_q_index = 0
+        self.call_from_thread(
+            lambda: self.query_one("#cmd-bar", CommandBar).set_quiz_questions(
+                [q.get("question", "") for q in questions]
+            )
+        )
         # mode will be set to quiz_answering in _apply_quiz_to_view (called from main thread)
 
         # Phase 2: persist updated SHA range (set via /quiz range_arg)
@@ -1356,6 +1464,8 @@ class GitStudyAppV2(App):
         final_output = ""
         try:
             for event in stream_read_progress(context, model_override=model_override):
+                if self._stop_event.is_set():
+                    return
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
                     self.call_from_thread(
@@ -1381,6 +1491,7 @@ class GitStudyAppV2(App):
         self.call_from_thread(self._set_mode, "idle")
         self.call_from_thread(self._end_progress, op_id)
         if final_output:
+            self._map_or_review_done = True
             self.call_from_thread(self._set_status_timed, "리뷰 완료.", 3.0)
             self.call_from_thread(
                 self._log_to_block, "리뷰 완료.", "info", log_block_id, op_id
@@ -1520,6 +1631,8 @@ class GitStudyAppV2(App):
         self.call_from_thread(self._update_progress, "파일 역할 분석 중...", op_id)
         summaries: dict[str, str] = {}
         for event in stream_map_progress(context, model_override=model_override):
+            if self._stop_event.is_set():
+                return
             if event.get("type") == "usage":
                 inp = event.get("input_tokens", 0)
                 out = event.get("output_tokens", 0)
@@ -1564,6 +1677,8 @@ class GitStudyAppV2(App):
                     model_override=model_override,
                     file_paths=file_paths,
                 ):
+                    if self._stop_event.is_set():
+                        return
                     if event.get("type") == "usage":
                         inp = event.get("input_tokens", 0)
                         out = event.get("output_tokens", 0)
@@ -1597,6 +1712,7 @@ class GitStudyAppV2(App):
         except Exception:
             pass
 
+        self._map_or_review_done = True
         self.call_from_thread(self._end_progress, op_id)
         self.call_from_thread(
             self._log_to_block, "맵 완료.", "info", log_block_id, op_id
@@ -1787,6 +1903,7 @@ class GitStudyAppV2(App):
         self, log_block_id: str | None = None, model_override: str = ""
     ) -> None:
         if not self._questions:
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(
                 self._set_status_timed,
                 "채점할 퀴즈가 없습니다. /quiz 먼저 실행하세요.",
@@ -1802,6 +1919,7 @@ class GitStudyAppV2(App):
             q for q in self._questions if q.get("id", "") not in self._answers
         ]
         if unanswered:
+            self.call_from_thread(self._set_mode, "idle")
             self.call_from_thread(
                 self._set_status_timed,
                 f"아직 {len(unanswered)}개 질문에 답변하지 않았습니다.",
@@ -1815,7 +1933,6 @@ class GitStudyAppV2(App):
             return
 
         op_id = uuid.uuid4().hex[:8]
-        self.call_from_thread(self._set_mode, "grading")
         self.call_from_thread(self._begin_progress, "채점 중...", log_block_id, op_id)
 
         grades: list[InlineQuizGrade] = []
@@ -1824,6 +1941,8 @@ class GitStudyAppV2(App):
             for event in stream_inline_grade_progress(
                 self._questions, self._answers, model_override=model_override
             ):
+                if self._stop_event.is_set():
+                    return
                 if event.get("type") == "node":
                     label = event.get("label", event.get("node", ""))
                     self.call_from_thread(
@@ -1852,6 +1971,7 @@ class GitStudyAppV2(App):
 
         self._grades = grades
         self._grading_summary = grading_summary
+        self._graded_this_session = True
         self.call_from_thread(self._set_mode, "idle")
         self.call_from_thread(self._end_progress, op_id)
         self.call_from_thread(self._sync_quiz_alert)
@@ -2259,6 +2379,14 @@ class GitStudyAppV2(App):
 
         arg = arg.strip()
         if arg:
+            if arg not in SUGGESTED_MODELS:
+                self._set_status_timed(f"알 수 없는 모델: {arg}", 5.0)
+                self._append_result(
+                    f"알 수 없는 모델: {arg}\n\n사용 가능한 모델:\n"
+                    + "\n".join(f"  {m}" for m in SUGGESTED_MODELS),
+                    "error",
+                )
+                return
             try:
                 save_settings(model=arg)
                 self._set_status_timed(f"모델 변경됨: {arg}", 3.0)
@@ -2435,6 +2563,10 @@ class GitStudyAppV2(App):
         self._answers = {}
         self._grades = []
         self._grading_summary = {}
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_quiz_questions([])
+        except Exception:
+            pass
         self._known_files = {}
         self._current_q_index = 0
         self._set_mode("idle")
@@ -2522,6 +2654,12 @@ class GitStudyAppV2(App):
         self._grades = payload.get("grades", [])
         self._grading_summary = payload.get("grading_summary", {})
         self._current_q_index = 0
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_quiz_questions(
+                [q.get("question", "") for q in questions]
+            )
+        except Exception:
+            pass
 
         # Restore known_files from questions if needed (not persisted — will be empty)
         self._known_files = {}
@@ -2822,11 +2960,15 @@ class GitStudyAppV2(App):
         """퀴즈 튜터 에이전트용 퀴즈 문항 컨텍스트 문자열 생성."""
         if not self._questions:
             return ""
+        grade_map = {g["id"]: g for g in self._grades}
         lines = []
         for i, q in enumerate(self._questions, 1):
             file_info = f"{q.get('file_path', '')}:{q.get('anchor_line', '')}"
             lines.append(f"Q{i}. [{file_info}] {q.get('question', '')}")
             lines.append(f"    예상 답변: {q.get('expected_answer', '')}")
+            grade = grade_map.get(q.get("id", ""))
+            if grade:
+                lines.append(f"    채점: {grade.get('score')}/10 — {grade.get('feedback', '')}")
         return "\n".join(lines)
 
     def _build_grade_context(self) -> dict | None:
@@ -2836,8 +2978,27 @@ class GitStudyAppV2(App):
         return dict(self._grading_summary)
 
     @work(thread=True)
-    def _start_chat(self, user_text: str, mentioned_files: tuple = ()) -> None:
+    def _start_chat(self, user_text: str, mentioned_files: tuple = (), mentioned_quizzes: tuple = ()) -> None:
         """채팅 메시지를 LLM으로 전송하고 스트리밍 응답을 표시."""
+        if mentioned_quizzes:
+            clean = re.sub(r'@\d+\s*', '', user_text).strip()
+            quiz_parts = []
+            for n in mentioned_quizzes:
+                idx = n - 1
+                if 0 <= idx < len(self._questions):
+                    q = self._questions[idx]
+                    file_path = q.get("file_path", "")
+                    anchor_line = q.get("anchor_line", "")
+                    loc = f"{file_path}:{anchor_line}" if anchor_line else file_path
+                    # 채점 결과는 quiz_context(system)에 포함 — user_text에 중복 금지 (supervisor 오분류 방지)
+                    quiz_parts.append(f"퀴즈 #{n} [{loc}]: {q.get('question', '')}")
+            if quiz_parts:
+                nums = ", ".join(f"#{n}" for n in mentioned_quizzes)
+                quiz_ref = "\n".join(quiz_parts)
+                if clean:
+                    user_text = f"{clean}\n\n[참조 퀴즈 — {nums}에 대해서만 답해줘]\n{quiz_ref}"
+                else:
+                    user_text = f"퀴즈 {nums} 힌트 요청 — 해당 퀴즈에 대해서만 답해줘. 답을 직접 알려주지 말고 사고 방향만 안내해줘.\n{quiz_ref}"
         if not user_text.strip():
             return
 
@@ -2950,6 +3111,8 @@ class GitStudyAppV2(App):
             mentioned_snippets=mentioned_snippets,
             grade_context=self._build_grade_context(),
         ):
+            if self._stop_event.is_set():
+                return
             if not block_holder:
                 continue
 
@@ -3203,6 +3366,10 @@ class GitStudyAppV2(App):
         self._grades = []
         self._grading_summary = {}
         self._current_q_index = 0
+        try:
+            self.query_one("#cmd-bar", CommandBar).set_quiz_questions([])
+        except Exception:
+            pass
         if self._mode == "quiz_answering":
             self._set_mode("idle")
         # InlineCodeView 퀴즈 블록 제거
@@ -3231,6 +3398,7 @@ class GitStudyAppV2(App):
         self._grades = []
         self._grading_summary = {}
         self._current_q_index = 0
+        self._quiz_retried = True
 
         try:
             code_view = self.query_one("#code-view", InlineCodeView)
@@ -3641,7 +3809,7 @@ class GitStudyAppV2(App):
                 and len(self._answers) >= len(self._questions)
                 and not self._grades
             ):
-                cb.set_quiz_alert("답변 완료! /grade 로 채점하세요")
+                cb.set_quiz_alert("답변 완료!", "/grade 로 채점하세요")
             elif (
                 not in_answer_input
                 and self._mode != "quiz_answering"
@@ -3649,7 +3817,9 @@ class GitStudyAppV2(App):
                 and len(self._answers) < len(self._questions)
                 and not self._grades
             ):
-                cb.set_quiz_alert("퀴즈▶▶ /answer, Shift+↑↓")
+                cb.set_quiz_alert("퀴즈▶▶", "/answer, Shift+↑↓")
+            elif self._grades:
+                cb.set_quiz_alert("채점 완료!", "결과 보기   Shift+↑↓")
             else:
                 cb.clear_quiz_alert()
         except Exception:
@@ -3903,7 +4073,7 @@ class GitStudyAppV2(App):
         self._process_action_queue()
 
     def _update_answer_status(self) -> None:
-        hint = "[bold cyan]Enter[/bold cyan] 답변 입력  [bold cyan]Shift+Enter[/bold cyan] 줄바꿈  [bold cyan]Shift+↑↓[/bold cyan] 이동  [dim]Esc 종료[/dim]"
+        hint = "[bold cyan]Enter[/bold cyan] 답변 입력  [bold cyan]Shift+Enter[/bold cyan] 줄바꿈  [bold cyan]Shift+↑↓[/bold cyan] 이동  [bold cyan]F1[/bold cyan] 힌트  [dim]Esc 종료[/dim]"
         self._set_status(hint)
 
 
@@ -4158,6 +4328,9 @@ TUI 명령어 (앱 실행 후):
     )
     args = parser.parse_args()
     repo_path = Path(args.path).expanduser().resolve() if args.path else None
-    result = GitStudyAppV2(repo_path=repo_path, auto_quiz_arg=args.auto_quiz).run()
+    app = GitStudyAppV2(repo_path=repo_path, auto_quiz_arg=args.auto_quiz)
+    result = app.run()
+    # 정상 반환 시 데몬 스레드의 중복 출력 방지
+    app._exit_printed.set()
     if result:
         print(result)
