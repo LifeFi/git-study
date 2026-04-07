@@ -699,16 +699,16 @@ class GitStudyAppV2(App):
                     return
                 if self._mode == "quiz_answering":
                     self._set_mode("idle")
-                    try:
-                        self.query_one(
-                            "#code-view", InlineCodeView
-                        )._refresh_quiz_blocks_state()
-                    except Exception:
-                        pass
-                    try:
-                        self.query_one("#cmd-bar", CommandBar).focus_input()
-                    except Exception:
-                        pass
+                try:
+                    self.query_one(
+                        "#code-view", InlineCodeView
+                    )._refresh_quiz_blocks_state()
+                except Exception:
+                    pass
+                try:
+                    self.query_one("#cmd-bar", CommandBar).focus_input()
+                except Exception:
+                    pass
                 self._set_mode("grading")
                 log_block_id = (
                     self._current_log_block.id if self._current_log_block else None
@@ -1993,6 +1993,7 @@ class GitStudyAppV2(App):
         avg = sum(scores) / len(scores) if scores else 0
         msg = f"채점 완료! 평균 {avg:.1f}/100  ({len(grades)}문제)"
         self._set_status_timed(msg, 3.0)
+        self._update_context_hint()  # _context_hint를 graded 힌트로 세팅 (타이머 만료 후 복원될 값)
         self._log_to_block(msg, "success", log_block_id, op_id)
 
     # ------------------------------------------------------------------
@@ -2000,8 +2001,6 @@ class GitStudyAppV2(App):
     # ------------------------------------------------------------------
 
     def _show_help(self) -> None:
-        from rich.text import Text as RichText
-
         hook_installed = (
             self._repo_source != "github"
             and bool(self._local_repo_root)
@@ -2010,14 +2009,11 @@ class GitStudyAppV2(App):
                 (self._local_repo_root / ".git" / "hooks" / "post-commit").read_text()
             )
         )
-        hook_desc = RichText()
-        if hook_installed:
-            hook_desc.append("● ", style="green")
-            hook_desc.append("설치됨", style="dim green")
-            hook_desc.append("  /hook off 으로 제거", style="dim")
-        else:
-            hook_desc.append("○ ", style="dim")
-            hook_desc.append("post-commit hook 설치 (커밋 후 자동 퀴즈)", style="dim")
+        hook_desc = (
+            "설치됨  (/hook off 으로 제거)"
+            if hook_installed
+            else "post-commit hook 설치 (커밋 후 자동 퀴즈)"
+        )
 
         cmd_bar = self.query_one("#cmd-bar", CommandBar)
         cmd_bar.show_help_panel(
@@ -2027,21 +2023,19 @@ class GitStudyAppV2(App):
                     "/quiz [범위] [--ai|--others] [개수]",
                     "퀴즈 생성 · 범위: HEAD~3, A..B 등 · 개수: 기본 3 · --ai AI 코드 / --others 타인 코드 모드",
                 ),
+                ("/quiz retry", "답변·채점 초기화 후 재시작"),
                 ("/grade", "채점"),
                 ("/answer", "답변 재진입"),
                 ("/review [범위]", "커밋 해설 보기"),
                 ("/clear", "대화 초기화 (이전 대화는 /resume 으로 복원)"),
                 ("/resume", "이전 대화 불러오기"),
                 ("/repo [URL/경로]", "저장소 전환 (인자 없으면 목록 모달)"),
-                ("/apikey", "API key 상태 표시"),
                 ("/apikey set <key>", "API key 설정"),
-                ("/apikey unset", "저장된 API key 삭제"),
-                (
-                    "/model [이름]",
-                    "모델 변경 (예: /model gpt-4o) · 인자 없으면 목록 표시",
-                ),
+                ("/model [이름]", "모델 변경 · 인자 없으면 목록 표시"),
                 ("/hook on", hook_desc),
                 ("/help", "도움말"),
+                ("", ""),
+                ("Shift+↑↓", "문제 이동"),
                 ("Shift+Tab", "채팅 뷰 ↔ 코드 뷰 전환"),
                 ("Ctrl+Q", "종료"),
             ]

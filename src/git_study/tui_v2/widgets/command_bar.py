@@ -591,9 +591,14 @@ class CommandBar(Widget):
         실제 status_text는 타이머 만료 후 자동 반영된다.
         """
         has_quiz = quiz_count > 0
-        quiz_incomplete = has_quiz and answered_count < quiz_count
 
-        if zone == "left_panel":
+        if graded:
+            hint = "다시 풀어보기 /quiz retry  │  새로운 커밋 공부 /commits"
+            if zone in ("command_bar_chat", "command_bar_code"):
+                if self._status_timer is not None:
+                    self._status_timer.stop()
+                    self._status_timer = None
+        elif zone == "left_panel":
             hint = "📂 파일 트리 — Tab: 코드뷰  │  Shift+Tab: 채팅"
             if has_quiz:
                 hint += "  │  Shift+↑↓: 문제 이동"
@@ -605,17 +610,8 @@ class CommandBar(Widget):
             hint = "Tab → 명령창으로 이동"
             if has_quiz:
                 hint += "  │  Shift+↑↓: 문제 이동"
-        elif zone == "command_bar_chat":
-            if graded:
-                hint = "다시 풀어보기 /quiz retry  │  새로운 커밋 공부 /commits"
-            elif has_quiz:
-                hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
-            else:
-                hint = self._DEFAULT_HINT
-        else:  # command_bar_code
-            if graded:
-                hint = "다시 풀어보기 /quiz retry  │  새로운 커밋 공부 /commits"
-            elif has_quiz:
+        elif zone in ("command_bar_chat", "command_bar_code"):
+            if has_quiz:
                 hint = "명령어: /quiz /grade  │  Shift+↑↓: 문제 이동"
             else:
                 hint = self._DEFAULT_HINT
@@ -858,6 +854,9 @@ class CommandBar(Widget):
 
             t = Text()
             for i, (cmd, desc) in enumerate(lines):
+                if cmd == "" and desc == "":
+                    t.append("\n")
+                    continue
                 pad = max(0, 25 - _display_width(cmd))
                 t.append(f"   {cmd}" + " " * pad, style="bold")
                 if isinstance(desc, Text):
