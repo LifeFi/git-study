@@ -2201,12 +2201,20 @@ class GitStudyAppV2(App):
         if arg.startswith("http") or arg.startswith("github.com"):
             try:
                 url = normalize_github_repo_url(arg)
-                self._switch_repo_impl("github", url)
             except ValueError as exc:
                 self._set_status_timed(f"잘못된 URL: {exc}", 5.0)
                 self._append_result(f"잘못된 URL: {exc}", "error")
+                return
+            display = url.split("github.com/")[-1].rstrip("/").removesuffix(".git")
+            self._set_status(f"URL 확인 완료: {display}")
+            self._append_result(f"URL 유효성 검사 통과: {url}", "info")
+            self._switch_repo_impl("github", url)
         else:
             path = Path(arg).expanduser().resolve()
+            if not path.exists():
+                self._set_status_timed(f"경로가 존재하지 않습니다: {arg}", 5.0)
+                self._append_result(f"경로가 존재하지 않습니다: {arg}", "error")
+                return
             self._switch_repo_impl("local", str(path))
 
     @work(thread=True)

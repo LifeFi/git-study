@@ -58,6 +58,11 @@ def normalize_github_repo_url(github_repo_url: str) -> str:
         raise ValueError("현재는 GitHub 저장소 URL만 지원합니다.")
     if not normalized.endswith(".git"):
         normalized = f"{normalized}.git"
+    # owner/repo 세그먼트 검증
+    path_part = normalized.split("github.com/")[-1].rstrip("/").removesuffix(".git")
+    segments = [s for s in path_part.split("/") if s]
+    if len(segments) < 2:
+        raise ValueError("GitHub URL은 github.com/owner/repo 형식이어야 합니다.")
     return normalized
 
 
