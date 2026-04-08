@@ -3311,6 +3311,7 @@ class GitStudyAppV2(App):
         """/quiz list: 세션별 퀴즈 목록 모달 열기."""
         sessions = list_learning_sessions(
             repo_source=self._repo_source,
+            github_repo_url=self._github_repo_url or "",
             local_repo_root=self._local_repo_root,
         )
         if not sessions:
@@ -3331,6 +3332,7 @@ class GitStudyAppV2(App):
                 sessions,
                 current_sid,
                 repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or "",
                 local_repo_root=self._local_repo_root,
             ),
             on_dismiss,

@@ -187,6 +187,7 @@ class QuizListScreen(ModalScreen[str | None]):
         current_sid: str,
         *,
         repo_source: str = "local",
+        github_repo_url: str = "",
         local_repo_root: Path | None = None,
     ) -> None:
         super().__init__()
@@ -197,6 +198,7 @@ class QuizListScreen(ModalScreen[str | None]):
         )
         self._current_sid = current_sid
         self._repo_source = repo_source
+        self._github_repo_url = github_repo_url
         self._local_repo_root = local_repo_root
 
         self._session_data_cache: dict[str, dict] = {}
@@ -325,6 +327,7 @@ class QuizListScreen(ModalScreen[str | None]):
             data = load_learning_session_file(
                 sid,
                 repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url,
                 local_repo_root=self._local_repo_root,
             ) or {}
         except Exception:
