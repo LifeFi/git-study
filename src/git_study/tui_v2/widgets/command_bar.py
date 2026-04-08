@@ -28,7 +28,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/answer", "답변 재진입"),
     ("/clear", "대화 초기화"),
     ("/resume", "이전 대화 불러오기"),
-    ("/repo", "저장소 전환 (URL 또는 경로)"),
+    ("/repo ", "저장소 전환 (URL 또는 경로)"),
     ("/apikey ", "API key 관리 — /apikey 뒤에 스페이스로 목록"),
     ("/model ", "모델 변경 — /model 뒤에 스페이스로 목록"),
     ("/hook ", "post-commit hook 관리 — /hook 뒤에 스페이스로 on/off 선택"),
@@ -54,10 +54,6 @@ _REVIEW_CANDIDATES: list[tuple[str, str]] = [
     ("/review HEAD~3", "최근 4개 커밋"),
 ]
 
-_REPO_CANDIDATES: list[tuple[str, str]] = [
-    ("/repo", "저장소 선택 창 열기"),
-    ("/repo <경로 또는 URL>", "신규 저장소 추가 / 전환"),
-]
 
 _MAP_CANDIDATES: list[tuple[str, str]] = [
     ("/map", "커밋 맵 + 프로젝트 구조"),
@@ -208,7 +204,7 @@ def _filter_slash_candidates(text: str) -> list[tuple[str, str]]:
         return [(cmd, desc) for cmd, desc in _REVIEW_CANDIDATES if query in cmd.lower()]
 
     if lower == "/repo" or lower.startswith("/repo "):
-        return list(_REPO_CANDIDATES)
+        return []
 
     if lower == "/map" or lower.startswith("/map "):
         return list(_MAP_CANDIDATES)
@@ -673,10 +669,11 @@ class CommandBar(Widget):
     }
 
     def _get_input_hint(self, text: str) -> str:
-        """입력된 커맨드에 따라 인자 힌트를 반환. 공백/인자가 있으면 빈 문자열."""
-        if not text or " " in text or "\n" in text:
+        """입력된 커맨드에 따라 인자 힌트를 반환. 실제 인자가 있으면 빈 문자열."""
+        stripped = text.strip()
+        if not stripped or " " in stripped or "\n" in stripped:
             return ""
-        return self._INPUT_HINTS.get(text.strip(), "")
+        return self._INPUT_HINTS.get(stripped, "")
 
     def _update_input_hint(self, text: str) -> None:
         hint = self._get_input_hint(text)

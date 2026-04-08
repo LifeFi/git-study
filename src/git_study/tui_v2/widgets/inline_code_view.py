@@ -784,9 +784,6 @@ class InlineQuizBlock(Widget):
         q = self._question
         qtype_ko = QUESTION_TYPE_KO.get(q.get("question_type", ""), q.get("question_type", ""))
         header_text = f"{self._num_label()} {qtype_ko}  ·  {q.get('file_path', '')}:{self._anchor_line_display()}"
-        if self._is_active:
-            header_text += "  ◀ 현재"
-
         yield Static(header_text, classes="iqb-header")
         yield Static(q.get("question", ""), classes="iqb-body")
         yield Static(self._build_status_text(), classes="iqb-status")
@@ -888,8 +885,6 @@ class InlineQuizBlock(Widget):
             q = self._question
             qtype_ko = QUESTION_TYPE_KO.get(q.get("question_type", ""), q.get("question_type", ""))
             header_text = f"{self._num_label()} {qtype_ko}  ·  {q.get('file_path', '')}:{self._anchor_line_display()}"
-            if self._is_active:
-                header_text += "  ◀ 현재"
             self.query_one(".iqb-header", Static).update(header_text)
             self.query_one(".iqb-status", Static).update(self._build_status_text())
         except Exception:

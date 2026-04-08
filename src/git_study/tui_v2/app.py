@@ -1211,6 +1211,19 @@ class GitStudyAppV2(App):
             )
             commit_shas = self._collect_shas_in_range(repo, oldest_sha, newest_sha)
             commits = [repo.commit(sha) for sha in commit_shas]
+            _warn_lines = sum(
+                s["insertions"] + s["deletions"]
+                for c in commits for s in c.stats.files.values()
+            )
+            _warn_files = len({p for c in commits for p in c.stats.files})
+            if _warn_lines > 500 or _warn_files > 10:
+                self.call_from_thread(
+                    self._log_to_block,
+                    f"⚠  {len(commits)}개 커밋 | {_warn_files}개 파일 | {_warn_lines}줄 변경 — 컨텍스트가 크면 LLM 처리가 느릴 수 있어요.",
+                    "info",
+                    log_block_id,
+                    op_id,
+                )
             if len(commits) == 1:
                 context = build_commit_context(commits[0], "selected", repo)
                 full_file_map = build_full_file_map(commits[0], repo)
@@ -1447,6 +1460,19 @@ class GitStudyAppV2(App):
             )
             commit_shas = self._collect_shas_in_range(repo, oldest_sha, newest_sha)
             commits = [repo.commit(sha) for sha in commit_shas]
+            _warn_lines = sum(
+                s["insertions"] + s["deletions"]
+                for c in commits for s in c.stats.files.values()
+            )
+            _warn_files = len({p for c in commits for p in c.stats.files})
+            if _warn_lines > 500 or _warn_files > 10:
+                self.call_from_thread(
+                    self._log_to_block,
+                    f"⚠  {len(commits)}개 커밋 | {_warn_files}개 파일 | {_warn_lines}줄 변경 — 컨텍스트가 크면 LLM 처리가 느릴 수 있어요.",
+                    "info",
+                    log_block_id,
+                    op_id,
+                )
             if len(commits) == 1:
                 context = build_commit_context(commits[0], "selected", repo)
             else:
@@ -2247,7 +2273,15 @@ class GitStudyAppV2(App):
         except Exception:
             saved_state = {}
 
+        if repo_source == "github":
+            display = url_or_path.split("github.com/")[-1].rstrip("/").removesuffix(".git")
+            result_msg = f"저장소 전환 완료: {display} (GitHub, 커밋 {len(commits)}개)"
+        else:
+            name = self._local_repo_root.name if self._local_repo_root else url_or_path
+            result_msg = f"저장소 전환 완료: {name} (로컬, 커밋 {len(commits)}개)"
+
         self.call_from_thread(self._apply_commits, commits, saved_state)
+        self.call_from_thread(self._append_result, result_msg, "info")
 
     # ------------------------------------------------------------------
     # API key management

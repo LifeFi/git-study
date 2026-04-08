@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static
 
-from ...domain.repo_context import DEFAULT_COMMIT_LIST_LIMIT, get_commit_list_snapshot
+from ...domain.repo_context import DEFAULT_COMMIT_LIST_LIMIT, get_commit_list_snapshot, get_repo
 from ...tui.commit_selection import (
     CommitSelection,
     selected_commit_indices,
@@ -85,6 +86,12 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
         padding-bottom: 1;
         color: $text-muted;
     }
+
+    #selection-stats {
+        height: 1;
+        padding: 0 1;
+        color: $text;
+    }
     """
 
     def __init__(
@@ -133,6 +140,7 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
                 "Space/Enter: S→E 선택  |  Tab: 전체 해제  |  Shift+Enter: 확인  |  Esc: 취소",
                 id="picker-help",
             )
+            yield Static("", id="selection-stats")
             with ListView(id="commit-list"):
                 for i in range(len(self._commits)):
                     yield ListItem(
@@ -461,6 +469,8 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
 
     def _update_range_session_banner(self) -> None:
         """Show a banner if a session exists for the current S..E range selection."""
+        self._refresh_stats_bar()
+
         status = self.query_one("#status-bar", Static)
         base = self._build_status()
 
@@ -490,6 +500,69 @@ class CommitPickerScreen(ModalScreen[tuple[CommitSelection, list[dict]] | None])
                 return
 
         status.update(base)
+
+    # ------------------------------------------------------------------
+    # Selection stats bar
+    # ------------------------------------------------------------------
+
+    def _refresh_stats_bar(self) -> None:
+        """선택 변경 시 stats bar를 즉시 '계산 중...' 으로 갱신하고 백그라운드 계산을 시작한다."""
+        indices = selected_commit_indices(self._selection)
+        if not indices:
+            self._set_stats_text("")
+            return
+        self._set_stats_text("계산 중...")
+        self._compute_selection_stats()
+
+    @work(thread=True)
+    def _compute_selection_stats(self) -> None:
+        """선택된 커밋들의 파일 수·추가/삭제 줄 수를 합산해 stats bar를 갱신한다."""
+        indices = selected_commit_indices(self._selection)
+        if not indices:
+            self.app.call_from_thread(self._set_stats_text, "")
+            return
+        try:
+            repo = get_repo(
+                repo_source=self._repo_source,
+                github_repo_url=self._github_repo_url or None,
+                refresh_remote=False,
+                local_repo_root=self._local_repo_root,
+            )
+            total_ins = 0
+            total_del = 0
+            file_set: set[str] = set()
+            for idx in indices:
+                if idx >= len(self._commits):
+                    continue
+                sha = self._commits[idx].get("sha", "")
+                if not sha:
+                    continue
+                commit = repo.commit(sha)
+                for path, stat in commit.stats.files.items():
+                    file_set.add(path)
+                    total_ins += stat["insertions"]
+                    total_del += stat["deletions"]
+            count = len(indices)
+            total_lines = total_ins + total_del
+            warn = (
+                "  [yellow]⚠ LLM 처리 느릴 수 있음[/yellow]"
+                if total_lines > 500 or len(file_set) > 10
+                else ""
+            )
+            text = (
+                f"{count}개 커밋 | {len(file_set)}개 파일 | "
+                f"[green]+{total_ins}[/green] [red]-{total_del}[/red]{warn}"
+            )
+            self.app.call_from_thread(self._set_stats_text, text)
+        except Exception:
+            self.app.call_from_thread(self._set_stats_text, "")
+
+    def _set_stats_text(self, text: str) -> None:
+        """stats bar 위젯을 업데이트한다 (메인 스레드)."""
+        try:
+            self.query_one("#selection-stats", Static).update(text)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Detail panel
