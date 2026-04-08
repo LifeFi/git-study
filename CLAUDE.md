@@ -27,11 +27,16 @@ uv run ruff check                                      # 린트
 ```
 src/git_study/
 ├── types.py                 ← 공용 TypedDict (InlineQuizQuestion, InlineQuizGrade 등)
+├── runtime_paths.py         ← 전역 런타임 디렉토리 경로 헬퍼
+├── secrets.py               ← API 키 로드/저장 (~/.git-study/secrets.json)
+├── settings.py              ← 전역 설정 로드/저장 (~/.git-study/settings.json)
+├── update_checker.py        ← PyPI 버전 업데이트 체크
 ├── tui_v2/                  ← 현재 작업 대상
 │   ├── app.py               ← GitStudyAppV2 (메인 앱, 모드 관리, 이벤트 핸들링)
 │   ├── commands.py          ← 명령어 파싱
 │   ├── screens/
 │   │   ├── commit_picker.py ← 커밋 범위 선택 모달
+│   │   ├── quiz_list.py     ← 세션별 퀴즈 목록 모달 (2패널: 세션 목록 | 퀴즈 상세)
 │   │   ├── repo_picker.py   ← 저장소 선택 모달
 │   │   └── thread_picker.py ← 대화 스레드 선택 모달
 │   └── widgets/
@@ -47,13 +52,20 @@ src/git_study/
 │   ├── repo_context.py      ← get_repo(), get_commit_list_snapshot(), build_commit_context()
 │   ├── code_context.py      ← get_file_content_at_commit_or_empty(), detect_code_language()
 │   ├── inline_anchor.py     ← find_anchor_line(), parse_file_context_blocks()
-│   └── repo_cache.py        ← 원격 저장소 캐시
+│   ├── repo_cache.py        ← 원격 저장소 캐시
+│   ├── general_quiz.py      ← GeneralQuiz 질문 타입 레이블/유틸
+│   ├── quiz_parsing.py      ← LLM 응답 퀴즈 파싱 (질문 섹션 regex)
+│   └── repo_map.py          ← 저장소 구조 분석 (파일 트리 + 커밋 빈도)
 ├── services/                ← LangGraph AI 서비스 진입점
-│   ├── inline_quiz_service.py   ← stream_inline_quiz_progress()
-│   ├── inline_grade_service.py  ← stream_inline_grade_progress()
-│   ├── read_service.py          ← stream_read_progress()
-│   ├── map_service.py           ← stream_map_progress()
-│   └── chat_service.py          ← stream_chat()
+│   ├── inline_quiz_service.py    ← stream_inline_quiz_progress()
+│   ├── inline_grade_service.py   ← stream_inline_grade_progress()
+│   ├── general_grade_service.py  ← stream_general_grade_progress()
+│   ├── quiz_service.py           ← stream_quiz_progress()
+│   ├── read_service.py           ← stream_read_progress()
+│   ├── map_service.py            ← stream_map_progress()
+│   └── chat_service.py           ← stream_chat()
+├── tools/
+│   └── code_context.py      ← NeighborCodeContextInput LangChain 툴
 ├── graphs/                  ← LangGraph 워크플로우
 ├── prompts/                 ← LLM 프롬프트 템플릿
 └── llm/                     ← LLM 클라이언트, 스키마
