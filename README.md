@@ -6,7 +6,7 @@ English | [한국어](README.ko.md)
 
 Why was this changed? What are the tradeoffs? It asks the questions that are hard to answer from a diff alone.
 
-![git-study demo](assets/demo_hq.gif)
+![git-study demo](https://github.com/LifeFi/git-study/raw/main/assets/demo_hq.gif)
 
 ---
 
@@ -101,9 +101,9 @@ Use `Shift+Tab` to switch between chat and code view.
 
 ## Keyboard Shortcuts
 
-| Key                    | Action                        |
-| ---------------------- | ----------------------------- |
-| `Shift+Tab`            | Toggle chat ↔ code view       |
+| Key                   | Action                        |
+| --------------------- | ----------------------------- |
+| `Shift+Tab`           | Toggle chat ↔ code view       |
 | `Shift+↑` / `Shift+↓` | Previous / next quiz question |
 
 ---
