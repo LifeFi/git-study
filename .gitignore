@@ -27,11 +27,28 @@ secrets.toml
 # oh-my-claudecode runtime state
 .omc/
 
-# 일회성 분석 아티팩트 (에이전트 생성)
-ADDITIONAL_AGENTS_DISCOVERED.md
-AGENT_ROLES_DETAILED.md
-ARCHITECTURE_INDEX.md
-GRAPHS_QUICK_REFERENCE.md
-LANGGRAPH_ARCHITECTURE.md
-QUICK_START.md
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+# Dependency directories
+node_modules/
+# Environment variables
+.env
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific
+.DS_Store
 
+# Task files
+# tasks.json
+# tasks/ 

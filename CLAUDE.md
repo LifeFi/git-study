@@ -2,7 +2,7 @@
 
 ## 마이그레이션 계획
 
-TypeScript 완전 전환 작업 예정. 자세한 계획은 `MIGRATION_PLAN.md` 참고.
+TypeScript 완전 전환 작업 예정. 자세한 계획은 `docs/migration/MIGRATION_PLAN.md` 참고.
 
 ---
 
