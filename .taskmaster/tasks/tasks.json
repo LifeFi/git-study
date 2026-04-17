@@ -1,0 +1,272 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Python 코드베이스 재구성 (src → py)",
+        "description": "기존 src/git_study를 py/ 디렉터리로 이동하여 Python과 TypeScript 병렬 개발 환경 구축",
+        "details": "1. `mv src py/src` 실행\n2. `mv pyproject.toml py/` 및 `mv uv.lock py/`\n3. py/.gitignore 생성 (venv, __pycache__ 등)\n4. 루트 .gitignore 업데이트하여 py/와 ts/ 각각 관리\n5. py/README.md 생성 (레거시 참고용)\n\npy/ 디렉터리 구조:\n```\npy/\n├── pyproject.toml\n├── uv.lock\n└── src/\n    └── git_study/\n```\n\n주의사항:\n- 기존 import 경로는 변경 없음 (package root가 py/src)\n- uv run 실행 시 `cd py && uv run git-study-v2` 방식 사용",
+        "testStrategy": "1. cd py && UV_CACHE_DIR=/tmp/uv-cache uv sync 성공 확인\n2. cd py && UV_CACHE_DIR=/tmp/uv-cache uv run git-study-v2 실행 검증\n3. 기존 Python TUI가 정상 동작하는지 수동 테스트",
+        "priority": "high",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 2,
+        "title": "TypeScript 프로젝트 초기화",
+        "description": "ts/ 디렉터리에 TypeScript + Node.js 환경 구축",
+        "details": "1. `mkdir ts && cd ts`\n2. `npm init -y` 실행\n3. package.json 설정:\n```json\n{\n  \"name\": \"git-study-ts\",\n  \"version\": \"0.1.0\",\n  \"type\": \"module\",\n  \"main\": \"dist/main.js\",\n  \"bin\": {\n    \"git-study-ts\": \"./dist/main.js\"\n  },\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"dev\": \"tsx src/main.tsx\",\n    \"start\": \"node dist/main.js\"\n  }\n}\n```\n\n4. 의존성 설치:\n```bash\nnpm install ink@^5.0.0 react@^18.3.0 @langchain/langgraph@^0.2.0 @langchain/langgraph-checkpoint-sqlite@^0.0.10 @langchain/openai@^0.3.0 shiki@^1.0.0 chalk@^5.3.0 simple-git@^3.25.0 better-sqlite3@^9.6.0 zod@^3.23.0 marked-terminal@^7.0.0 @inkjs/ui@^2.0.0\nnpm install -D typescript@^5.4.0 @types/node@^20.0.0 @types/react@^18.3.0 @types/better-sqlite3@^7.6.0 tsx@^4.0.0\n```\n\n5. tsconfig.json 생성:\n```json\n{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"ESNext\",\n    \"moduleResolution\": \"bundler\",\n    \"jsx\": \"react\",\n    \"jsxImportSource\": \"react\",\n    \"outDir\": \"./dist\",\n    \"rootDir\": \"./src\",\n    \"strict\": true,\n    \"esModuleInterop\": true,\n    \"skipLibCheck\": true,\n    \"resolveJsonModule\": true\n  },\n  \"include\": [\"src/**/*\"],\n  \"exclude\": [\"node_modules\", \"dist\"]\n}\n```\n\n6. src/ 디렉터리 생성:\n```\nts/src/\n├── main.tsx (진입점)\n├── types.ts\n├── graphs/\n├── services/\n├── domain/\n├── llm/\n└── tui/\n```",
+        "testStrategy": "1. npm run build 성공 확인\n2. src/main.tsx에 간단한 console.log 작성 후 npm run dev 실행\n3. tsc --noEmit으로 타입 오류 없음 확인",
+        "priority": "high",
+        "dependencies": [
+          1
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 3,
+        "title": "공용 타입 정의 (types.ts)",
+        "description": "Python types.py의 TypedDict를 Zod 스키마 + TypeScript 타입으로 전환",
+        "details": "py/src/git_study/types.py 참고하여 작성:\n\n```typescript\nimport { z } from 'zod'\n\n// InlineQuizQuestion\nexport const InlineQuizQuestionSchema = z.object({\n  question_id: z.string(),\n  file_path: z.string(),\n  anchor_snippet: z.string(),\n  question_text: z.string(),\n  question_type: z.enum(['conceptual', 'factual', 'analytical']),\n  choices: z.array(z.string()).optional(),\n  expected_answer_hint: z.string().optional(),\n})\nexport type InlineQuizQuestion = z.infer<typeof InlineQuizQuestionSchema>\n\n// InlineQuizGrade\nexport const InlineQuizGradeSchema = z.object({\n  question_id: z.string(),\n  is_correct: z.boolean(),\n  feedback: z.string(),\n  score: z.number().min(0).max(100),\n})\nexport type InlineQuizGrade = z.infer<typeof InlineQuizGradeSchema>\n\n// GeneralQuiz\nexport const GeneralQuizSchema = z.object({\n  question_id: z.string(),\n  question_type: z.string(),\n  question_text: z.string(),\n  choices: z.array(z.string()).optional(),\n})\nexport type GeneralQuiz = z.infer<typeof GeneralQuizSchema>\n\n// CommitSelection\nexport interface CommitSelection {\n  start_index: number\n  end_index: number\n}\n\n// AppMode\nexport type AppMode = 'idle' | 'quiz_loading' | 'quiz_answering' | 'grading' | 'reviewing' | 'chatting'\n```",
+        "testStrategy": "1. npm run build로 타입 오류 없음 확인\n2. 각 스키마에 대해 .parse() 테스트 코드 작성\n3. py/src/git_study/types.py와 필드 1:1 매칭 확인",
+        "priority": "high",
+        "dependencies": [
+          2
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 4,
+        "title": "LLM 클라이언트 구현 (4-step fallback chain)",
+        "description": "Python llm/client.py의 invoke_structured 로직을 TypeScript로 재구현",
+        "details": "ts/src/llm/client.ts 작성:\n\n```typescript\nimport { ChatOpenAI } from '@langchain/openai'\nimport { z, ZodSchema } from 'zod'\nimport { zodToJsonSchema } from 'zod-to-json-schema'\n\nexport class LLMClient {\n  private llm: ChatOpenAI\n\n  constructor(modelName = 'gpt-4o-mini', temperature = 0) {\n    this.llm = new ChatOpenAI({ modelName, temperature })\n  }\n\n  async invokeStructured<T>(\n    prompt: string,\n    schema: ZodSchema<T>\n  ): Promise<T> {\n    const retryPrompt = `${prompt}\\n\\nIMPORTANT: Return only data that matches the required schema exactly. Do not add markdown, commentary, or extra wrapper text.`\n\n    // Step 1: json_schema strict=true\n    try {\n      const llm1 = this.llm.withStructuredOutput(schema, {\n        method: 'jsonSchema',\n        strict: true,\n      })\n      return await llm1.invoke(retryPrompt) as T\n    } catch (e) {\n      console.warn('[LLM] Step 1 failed (strict=true):', e)\n    }\n\n    // Step 2: json_schema strict=false\n    try {\n      const llm2 = this.llm.withStructuredOutput(schema, {\n        method: 'jsonSchema',\n        strict: false,\n      })\n      return await llm2.invoke(retryPrompt) as T\n    } catch (e) {\n      console.warn('[LLM] Step 2 failed (strict=false):', e)\n    }\n\n    // Step 3: jsonMode\n    try {\n      const llm3 = this.llm.withStructuredOutput(schema, {\n        method: 'jsonMode',\n      })\n      return await llm3.invoke(retryPrompt) as T\n    } catch (e) {\n      console.warn('[LLM] Step 3 failed (jsonMode):', e)\n    }\n\n    // Step 4: raw JSON parse from text\n    const raw = await this.llm.invoke(retryPrompt)\n    const text = typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content)\n    const parsed = this.parseJsonFromText(text)\n    return schema.parse(parsed)\n  }\n\n  private parseJsonFromText(text: string): unknown {\n    // Extract JSON from ```json...``` or plain JSON\n    const jsonMatch = text.match(/```json\\s*([\\s\\S]*?)```/) || text.match(/\\{[\\s\\S]*\\}/)\n    if (!jsonMatch) throw new Error('No JSON found in LLM response')\n    return JSON.parse(jsonMatch[1] || jsonMatch[0])\n  }\n}\n```\n\n참조: py/src/git_study/llm/client.py:140-180",
+        "testStrategy": "1. 간단한 Zod 스키마로 invokeStructured() 테스트\n2. 고의로 malformed JSON 응답을 시뮬레이션하여 4-step fallback 동작 확인\n3. Python 버전과 동일한 프롬프트로 결과 비교",
+        "priority": "high",
+        "dependencies": [
+          3
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 5,
+        "title": "SqliteSaver 체크포인트 통합",
+        "description": "chat_graph에서 SqliteSaver를 사용하여 대화 상태 저장",
+        "details": "ts/src/graphs/chat_graph.ts 작성:\n\n```typescript\nimport { StateGraph, Annotation } from '@langchain/langgraph'\nimport { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite'\nimport path from 'node:path'\nimport os from 'node:os'\n\n// 상태 정의\nconst ChatStateAnnotation = Annotation.Root({\n  messages: Annotation<any[]>({\n    reducer: (x, y) => x.concat(y),\n    default: () => [],\n  }),\n})\n\nexport async function buildChatGraph() {\n  const graph = new StateGraph(ChatStateAnnotation)\n    .addNode('agent', async (state) => {\n      // 간단한 echo 노드 (Phase 1 검증용)\n      return { messages: [{ role: 'assistant', content: 'Echo: ' + state.messages[state.messages.length - 1].content }] }\n    })\n    .addEdge('__start__', 'agent')\n    .addEdge('agent', '__end__')\n\n  return graph\n}\n\nexport async function getChatApp(threadId: string) {\n  const dbPath = path.join(os.homedir(), '.git-study', 'chat.db')\n  const checkpointer = SqliteSaver.fromConnString(dbPath)\n  const graph = await buildChatGraph()\n  const app = graph.compile({ checkpointer })\n  return { app, config: { configurable: { thread_id: threadId } } }\n}\n```\n\n참조: py/src/git_study/services/chat_service.py:60-92",
+        "testStrategy": "1. getChatApp() 호출하여 SqliteSaver 초기화 성공 확인\n2. 동일 threadId로 여러 메시지 스트리밍하여 체크포인트 저장 검증\n3. ~/.git-study/chat.db 파일 생성 및 테이블 구조 확인 (SQLite 브라우저)",
+        "priority": "high",
+        "dependencies": [
+          4
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 6,
+        "title": "Git 도메인 레이어 - repo_context.ts",
+        "description": "GitPython을 simple-git로 대체하여 커밋 히스토리 조회",
+        "details": "ts/src/domain/repo_context.ts 작성:\n\n```typescript\nimport simpleGit, { SimpleGit, LogResult } from 'simple-git'\nimport path from 'node:path'\n\nexport interface CommitInfo {\n  sha: string\n  short_sha: string\n  author: string\n  date: string\n  message: string\n}\n\nexport async function getRepo(repoPath: string): Promise<SimpleGit> {\n  const git = simpleGit(repoPath)\n  // 유효성 검사\n  const isRepo = await git.checkIsRepo()\n  if (!isRepo) throw new Error(`Not a git repository: ${repoPath}`)\n  return git\n}\n\nexport async function getCommitListSnapshot(\n  git: SimpleGit,\n  maxCount = 100\n): Promise<CommitInfo[]> {\n  const log: LogResult = await git.log({ maxCount })\n  return log.all.map((commit) => ({\n    sha: commit.hash,\n    short_sha: commit.hash.slice(0, 7),\n    author: commit.author_name,\n    date: commit.date,\n    message: commit.message,\n  }))\n}\n\nexport async function buildCommitContext(\n  git: SimpleGit,\n  oldestSha: string,\n  newestSha: string\n): Promise<string> {\n  const range = `${oldestSha}..${newestSha}`\n  const log = await git.log({ from: oldestSha, to: newestSha })\n  const diff = await git.diff([range])\n\n  return `# Commit Range: ${range}\\n\\n## Commits\\n${log.all.map(c => `- ${c.hash.slice(0, 7)} ${c.message}`).join('\\n')}\\n\\n## Diff\\n${diff}`\n}\n```\n\n참조: py/src/git_study/domain/repo_context.py",
+        "testStrategy": "1. 테스트 Git 저장소에서 getRepo() 호출\n2. getCommitListSnapshot()으로 최근 10개 커밋 조회\n3. buildCommitContext()로 범위 diff 추출 후 Python 버전 결과와 비교",
+        "priority": "high",
+        "dependencies": [
+          3
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 7,
+        "title": "Git 도메인 레이어 - code_context.ts",
+        "description": "파일별 diff 추출 및 코드 컨텍스트 빌드",
+        "details": "ts/src/domain/code_context.ts 작성:\n\n```typescript\nimport { SimpleGit } from 'simple-git'\n\nexport interface FileDiff {\n  file_path: string\n  status: 'A' | 'M' | 'D' | 'R'\n  additions: number\n  deletions: number\n  diff: string\n}\n\nexport async function getFileContentAtCommit(\n  git: SimpleGit,\n  sha: string,\n  filePath: string\n): Promise<string> {\n  try {\n    return await git.show([`${sha}:${filePath}`])\n  } catch {\n    return ''\n  }\n}\n\nexport async function getFileDiffs(\n  git: SimpleGit,\n  oldestSha: string,\n  newestSha: string\n): Promise<FileDiff[]> {\n  const diffSummary = await git.diffSummary([`${oldestSha}..${newestSha}`])\n  const files: FileDiff[] = []\n\n  for (const file of diffSummary.files) {\n    const diff = await git.diff([`${oldestSha}..${newestSha}`, '--', file.file])\n    files.push({\n      file_path: file.file,\n      status: file.binary ? 'M' : 'M', // 간소화\n      additions: file.insertions,\n      deletions: file.deletions,\n      diff,\n    })\n  }\n\n  return files\n}\n\nexport function detectCodeLanguage(filePath: string): string {\n  const ext = filePath.split('.').pop() || ''\n  const langMap: Record<string, string> = {\n    ts: 'typescript',\n    tsx: 'tsx',\n    js: 'javascript',\n    jsx: 'jsx',\n    py: 'python',\n    md: 'markdown',\n    json: 'json',\n  }\n  return langMap[ext] || 'plaintext'\n}\n```\n\n참조: py/src/git_study/domain/code_context.py",
+        "testStrategy": "1. getFileContentAtCommit()로 특정 커밋의 파일 내용 조회\n2. getFileDiffs()로 커밋 범위의 변경 파일 목록 추출\n3. detectCodeLanguage() 유닛 테스트 (각 확장자별)",
+        "priority": "high",
+        "dependencies": [
+          6
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 8,
+        "title": "Git 도메인 레이어 - inline_anchor.ts",
+        "description": "앵커 스니펫 기반 퀴즈 위치 탐색",
+        "details": "ts/src/domain/inline_anchor.ts 작성:\n\n```typescript\nexport interface AnchorMatch {\n  line_number: number\n  confidence: number\n}\n\nexport function findAnchorLine(\n  codeLines: string[],\n  anchorSnippet: string\n): AnchorMatch | null {\n  const anchorNormalized = anchorSnippet.trim().replace(/\\s+/g, ' ')\n  \n  for (let i = 0; i < codeLines.length; i++) {\n    const lineNormalized = codeLines[i].trim().replace(/\\s+/g, ' ')\n    if (lineNormalized.includes(anchorNormalized)) {\n      return { line_number: i + 1, confidence: 1.0 }\n    }\n  }\n\n  // Fuzzy match (간소화)\n  for (let i = 0; i < codeLines.length; i++) {\n    const line = codeLines[i].toLowerCase()\n    const anchor = anchorNormalized.toLowerCase()\n    if (line.includes(anchor.slice(0, Math.min(20, anchor.length)))) {\n      return { line_number: i + 1, confidence: 0.7 }\n    }\n  }\n\n  return null\n}\n\nexport function parseFileContextBlocks(diffText: string): Map<string, string> {\n  // diff에서 파일별 코드 블록 추출 (간소화)\n  const blocks = new Map<string, string>()\n  const fileRegex = /diff --git a\\/(.+?) b\\/(.+)/g\n  let match\n  while ((match = fileRegex.exec(diffText)) !== null) {\n    blocks.set(match[2], diffText.slice(match.index, match.index + 500))\n  }\n  return blocks\n}\n```\n\n참조: py/src/git_study/domain/inline_anchor.py",
+        "testStrategy": "1. 샘플 코드 라인 배열과 앵커 스니펫으로 findAnchorLine() 테스트\n2. confidence 점수 계산 검증\n3. parseFileContextBlocks()로 diff 파싱 후 파일 경로별 블록 확인",
+        "priority": "medium",
+        "dependencies": [
+          7
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 9,
+        "title": "inline_quiz_graph 포팅",
+        "description": "Python inline_quiz_graph를 LangGraph.js로 전환",
+        "details": "ts/src/graphs/inline_quiz_graph.ts 작성:\n\n```typescript\nimport { StateGraph, Annotation } from '@langchain/langgraph'\nimport { InlineQuizQuestionSchema } from '../types.js'\nimport { LLMClient } from '../llm/client.js'\n\nconst InlineQuizStateAnnotation = Annotation.Root({\n  commit_context: Annotation<string>(),\n  draft_questions: Annotation<any[]>({\n    reducer: (x, y) => y,\n    default: () => [],\n  }),\n  review_feedback: Annotation<string>({\n    reducer: (x, y) => y,\n    default: () => '',\n  }),\n  final_questions: Annotation<any[]>({\n    reducer: (x, y) => y,\n    default: () => [],\n  }),\n  iteration: Annotation<number>({\n    reducer: (x, y) => y,\n    default: () => 0,\n  }),\n})\n\nexport function buildInlineQuizGraph(llmClient: LLMClient) {\n  const graph = new StateGraph(InlineQuizStateAnnotation)\n\n  graph.addNode('draft', async (state) => {\n    // 프롬프트 생성 (간소화)\n    const prompt = `Generate inline quiz questions for:\\n${state.commit_context}`\n    const questions = await llmClient.invokeStructured(\n      prompt,\n      InlineQuizQuestionSchema.array()\n    )\n    return { draft_questions: questions, iteration: state.iteration + 1 }\n  })\n\n  graph.addNode('review', async (state) => {\n    // 리뷰 로직 (간소화)\n    const feedback = state.draft_questions.length > 0 ? 'APPROVED' : 'REJECTED'\n    return { review_feedback: feedback }\n  })\n\n  graph.addNode('finalize', async (state) => {\n    return { final_questions: state.draft_questions }\n  })\n\n  graph.addEdge('__start__', 'draft')\n  graph.addEdge('draft', 'review')\n  graph.addConditionalEdges('review', (state) => {\n    return state.review_feedback === 'APPROVED' ? 'finalize' : 'draft'\n  })\n  graph.addEdge('finalize', '__end__')\n\n  return graph\n}\n```\n\n참조: py/src/git_study/graphs/inline_quiz_graph.py",
+        "testStrategy": "1. buildInlineQuizGraph() 컴파일 성공\n2. 샘플 commit_context로 그래프 실행\n3. draft → review → finalize 플로우 검증\n4. final_questions가 InlineQuizQuestionSchema 스키마 준수 확인",
+        "priority": "high",
+        "dependencies": [
+          4,
+          7
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 10,
+        "title": "inline_grade_graph 포팅",
+        "description": "답변 채점 그래프를 TypeScript로 전환",
+        "details": "ts/src/graphs/inline_grade_graph.ts 작성:\n\n```typescript\nimport { StateGraph, Annotation } from '@langchain/langgraph'\nimport { InlineQuizGradeSchema } from '../types.js'\nimport { LLMClient } from '../llm/client.js'\n\nconst InlineGradeStateAnnotation = Annotation.Root({\n  questions: Annotation<any[]>(),\n  answers: Annotation<Record<string, string>>(),\n  draft_grades: Annotation<any[]>({\n    reducer: (x, y) => y,\n    default: () => [],\n  }),\n  final_grades: Annotation<any[]>({\n    reducer: (x, y) => y,\n    default: () => [],\n  }),\n})\n\nexport function buildInlineGradeGraph(llmClient: LLMClient) {\n  const graph = new StateGraph(InlineGradeStateAnnotation)\n\n  graph.addNode('grade', async (state) => {\n    const grades = await Promise.all(\n      state.questions.map(async (q: any) => {\n        const answer = state.answers[q.question_id] || ''\n        const prompt = `Grade this answer:\\nQuestion: ${q.question_text}\\nAnswer: ${answer}`\n        return await llmClient.invokeStructured(prompt, InlineQuizGradeSchema)\n      })\n    )\n    return { draft_grades: grades }\n  })\n\n  graph.addNode('finalize', async (state) => {\n    return { final_grades: state.draft_grades }\n  })\n\n  graph.addEdge('__start__', 'grade')\n  graph.addEdge('grade', 'finalize')\n  graph.addEdge('finalize', '__end__')\n\n  return graph\n}\n```\n\n참조: py/src/git_study/graphs/inline_grade_graph.py",
+        "testStrategy": "1. 샘플 questions + answers로 그래프 실행\n2. final_grades가 InlineQuizGradeSchema 준수 확인\n3. 각 question_id에 대응하는 grade 생성 검증",
+        "priority": "high",
+        "dependencies": [
+          9
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 11,
+        "title": "quiz_graph 및 read_graph 포팅",
+        "description": "일반 퀴즈 생성 및 코드 읽기 그래프 전환",
+        "details": "ts/src/graphs/quiz_graph.ts 작성 (inline_quiz_graph와 유사 구조):\n- GeneralQuizSchema 사용\n- draft → review → finalize 패턴\n\nts/src/graphs/read_graph.ts 작성:\n- 코드 읽기 요약 생성\n- 상태: { commit_context, summary }\n\n참조:\n- py/src/git_study/graphs/quiz_graph.py\n- py/src/git_study/graphs/read_graph.py",
+        "testStrategy": "1. quiz_graph 실행하여 GeneralQuiz 배열 생성\n2. read_graph 실행하여 summary 텍스트 생성\n3. Python 버전과 출력 형식 비교",
+        "priority": "medium",
+        "dependencies": [
+          9
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 12,
+        "title": "서비스 레이어 포팅 (stream_*_progress)",
+        "description": "Python services/를 TypeScript 제너레이터로 전환",
+        "details": "ts/src/services/inline_quiz_service.ts 작성:\n\n```typescript\nimport { buildInlineQuizGraph } from '../graphs/inline_quiz_graph.js'\nimport { LLMClient } from '../llm/client.js'\n\nexport async function* streamInlineQuizProgress(\n  commitContext: string\n): AsyncGenerator<{ type: string; content?: any }> {\n  const llmClient = new LLMClient()\n  const graph = buildInlineQuizGraph(llmClient)\n  const app = graph.compile()\n\n  yield { type: 'start' }\n\n  const stream = await app.stream({\n    commit_context: commitContext,\n  })\n\n  for await (const event of stream) {\n    if (event.draft) {\n      yield { type: 'draft', content: event.draft.draft_questions }\n    }\n    if (event.finalize) {\n      yield { type: 'done', content: event.finalize.final_questions }\n    }\n  }\n}\n```\n\n동일 패턴으로:\n- inline_grade_service.ts\n- quiz_service.ts\n- read_service.ts\n- chat_service.ts\n\n참조: py/src/git_study/services/",
+        "testStrategy": "1. streamInlineQuizProgress() 호출하여 이벤트 스트림 수신\n2. type: 'draft', 'done' 이벤트 순서 확인\n3. Python 버전과 동일한 입력으로 결과 비교",
+        "priority": "high",
+        "dependencies": [
+          10,
+          11
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 13,
+        "title": "Shiki 코드 하이라이팅 통합",
+        "description": "Rich/Pygments를 Shiki ANSI 출력으로 대체",
+        "details": "ts/src/tui/code_renderer.ts 작성:\n\n```typescript\nimport { codeToAnsi } from 'shiki'\n\nexport async function highlightCode(\n  code: string,\n  lang: string,\n  theme = 'vitesse-dark'\n): Promise<string> {\n  return await codeToAnsi(code, {\n    lang,\n    theme,\n  })\n}\n\nexport function renderCodeWithLineNumbers(\n  ansiCode: string,\n  startLine = 1\n): string {\n  const lines = ansiCode.split('\\n')\n  return lines\n    .map((line, idx) => {\n      const lineNum = String(startLine + idx).padStart(4, ' ')\n      return `${lineNum} │ ${line}`\n    })\n    .join('\\n')\n}\n```\n\n참조: py/src/git_study/tui_v2/widgets/inline_code_view.py (Pygments 사용 부분)",
+        "testStrategy": "1. highlightCode()로 샘플 TypeScript 코드 렌더링\n2. ANSI 이스케이프 시퀀스 포함 여부 확인\n3. 터미널에서 출력 시 색상 표시 검증",
+        "priority": "medium",
+        "dependencies": [
+          3
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 14,
+        "title": "Ink TUI - AppStatusBar 컴포넌트",
+        "description": "상단 상태바 (저장소, 커밋 범위, 모드 표시)",
+        "details": "ts/src/tui/components/AppStatusBar.tsx 작성:\n\n```tsx\nimport React from 'react'\nimport { Box, Text } from 'ink'\nimport { AppMode } from '../../types.js'\n\ninterface AppStatusBarProps {\n  repoName: string\n  commitRange: string\n  mode: AppMode\n}\n\nexport function AppStatusBar({ repoName, commitRange, mode }: AppStatusBarProps) {\n  return (\n    <Box borderStyle=\"single\" paddingX={1}>\n      <Text color=\"cyan\">📦 {repoName}</Text>\n      <Text dimColor> | </Text>\n      <Text color=\"yellow\">🔖 {commitRange}</Text>\n      <Text dimColor> | </Text>\n      <Text color=\"magenta\">⚡ {mode}</Text>\n    </Box>\n  )\n}\n```\n\n참조: py/src/git_study/tui_v2/widgets/app_status_bar.py",
+        "testStrategy": "1. npm run dev로 Ink 앱 실행 시 상태바 렌더링\n2. repoName, commitRange, mode 변경 시 업데이트 확인\n3. Python TUI와 레이아웃 비교",
+        "priority": "medium",
+        "dependencies": [
+          13
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 15,
+        "title": "Ink TUI - HistoryView 컴포넌트",
+        "description": "대화 히스토리 및 Markdown 렌더링",
+        "details": "ts/src/tui/components/HistoryView.tsx 작성:\n\n```tsx\nimport React from 'react'\nimport { Box, Text } from 'ink'\nimport marked from 'marked'\nimport TerminalRenderer from 'marked-terminal'\n\nmarked.setOptions({\n  renderer: new TerminalRenderer(),\n})\n\ninterface Message {\n  role: 'user' | 'assistant'\n  content: string\n}\n\ninterface HistoryViewProps {\n  messages: Message[]\n}\n\nexport function HistoryView({ messages }: HistoryViewProps) {\n  return (\n    <Box flexDirection=\"column\" paddingX={1}>\n      {messages.map((msg, idx) => (\n        <Box key={idx} flexDirection=\"column\" marginY={1}>\n          <Text bold color={msg.role === 'user' ? 'green' : 'blue'}>\n            {msg.role === 'user' ? '👤 User' : '🤖 Assistant'}\n          </Text>\n          <Text>{marked(msg.content)}</Text>\n        </Box>\n      ))}\n    </Box>\n  )\n}\n```\n\n참조: py/src/git_study/tui_v2/widgets/history_view.py",
+        "testStrategy": "1. 샘플 메시지 배열로 HistoryView 렌더링\n2. Markdown 포맷 (볼드, 링크 등) 표시 확인\n3. 스크롤 동작 검증 (Ink의 virtualization 활용)",
+        "priority": "medium",
+        "dependencies": [
+          14
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 16,
+        "title": "Ink TUI - CommandBar 컴포넌트",
+        "description": "하단 명령 입력창 + 자동완성",
+        "details": "ts/src/tui/components/CommandBar.tsx 작성:\n\n```tsx\nimport React, { useState } from 'react'\nimport { Box, Text, useInput } from 'ink'\nimport { TextInput } from '@inkjs/ui'\n\ninterface CommandBarProps {\n  onSubmit: (command: string) => void\n  suggestions?: string[]\n}\n\nexport function CommandBar({ onSubmit, suggestions = [] }: CommandBarProps) {\n  const [input, setInput] = useState('')\n\n  useInput((input, key) => {\n    if (key.return) {\n      onSubmit(input)\n      setInput('')\n    }\n  })\n\n  return (\n    <Box flexDirection=\"column\" borderStyle=\"single\" paddingX={1}>\n      <Box>\n        <Text color=\"green\">&gt; </Text>\n        <TextInput value={input} onChange={setInput} />\n      </Box>\n      {suggestions.length > 0 && (\n        <Box marginTop={1}>\n          <Text dimColor>Suggestions: {suggestions.join(', ')}</Text>\n        </Box>\n      )}\n    </Box>\n  )\n}\n```\n\n참조: py/src/git_study/tui_v2/widgets/command_bar.py",
+        "testStrategy": "1. CommandBar 렌더링 및 입력 이벤트 처리\n2. Enter 키로 onSubmit 콜백 호출 확인\n3. suggestions 배열 변경 시 자동완성 힌트 표시",
+        "priority": "medium",
+        "dependencies": [
+          15
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 17,
+        "title": "Ink TUI - InlineCodeView 컴포넌트",
+        "description": "파일 트리 + 코드 뷰 + 퀴즈 블록 통합",
+        "details": "ts/src/tui/components/InlineCodeView.tsx 작성:\n\n```tsx\nimport React, { useState } from 'react'\nimport { Box, Text } from 'ink'\nimport { highlightCode } from '../code_renderer.js'\nimport { InlineQuizQuestion } from '../../types.js'\n\ninterface InlineCodeViewProps {\n  files: string[]\n  selectedFile: string\n  code: string\n  language: string\n  questions: InlineQuizQuestion[]\n}\n\nexport function InlineCodeView({\n  files,\n  selectedFile,\n  code,\n  language,\n  questions,\n}: InlineCodeViewProps) {\n  const [highlightedCode, setHighlightedCode] = useState('')\n\n  React.useEffect(() => {\n    highlightCode(code, language).then(setHighlightedCode)\n  }, [code, language])\n\n  return (\n    <Box flexDirection=\"row\">\n      {/* 파일 트리 */}\n      <Box flexDirection=\"column\" width={30} borderStyle=\"single\">\n        {files.map((file) => (\n          <Text\n            key={file}\n            bold={file === selectedFile}\n            color={file === selectedFile ? 'green' : 'white'}\n          >\n            {file}\n          </Text>\n        ))}\n      </Box>\n\n      {/* 코드 뷰 */}\n      <Box flexDirection=\"column\" flexGrow={1} paddingX={1}>\n        <Text>{highlightedCode}</Text>\n\n        {/* 퀴즈 블록 (간소화) */}\n        {questions.map((q, idx) => (\n          <Box key={q.question_id} marginTop={1} borderStyle=\"round\" borderColor=\"yellow\">\n            <Text color=\"yellow\">❓ Q{idx + 1}: {q.question_text}</Text>\n          </Box>\n        ))}\n      </Box>\n    </Box>\n  )\n}\n```\n\n참조: py/src/git_study/tui_v2/widgets/inline_code_view.py",
+        "testStrategy": "1. 샘플 파일 목록 + 코드로 InlineCodeView 렌더링\n2. Shiki 하이라이팅 적용 확인\n3. questions 배열로 퀴즈 블록 표시\n4. 파일 선택 시 코드 전환 동작 검증",
+        "priority": "high",
+        "dependencies": [
+          13,
+          16
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 18,
+        "title": "Ink TUI - 메인 App 통합",
+        "description": "App.tsx에서 모든 컴포넌트 조합 + 명령 파싱",
+        "details": "ts/src/tui/App.tsx 작성:\n\n```tsx\nimport React, { useState } from 'react'\nimport { render, Box } from 'ink'\nimport { AppStatusBar } from './components/AppStatusBar.js'\nimport { HistoryView } from './components/HistoryView.js'\nimport { CommandBar } from './components/CommandBar.js'\nimport { InlineCodeView } from './components/InlineCodeView.js'\nimport { AppMode } from '../types.js'\n\nfunction App() {\n  const [mode, setMode] = useState<AppMode>('idle')\n  const [messages, setMessages] = useState<any[]>([])\n  const [files, setFiles] = useState<string[]>(['example.ts'])\n  const [selectedFile, setSelectedFile] = useState('example.ts')\n  const [code, setCode] = useState('console.log(\"Hello\")')\n  const [questions, setQuestions] = useState<any[]>([])\n\n  const handleCommand = async (cmd: string) => {\n    if (cmd.startsWith('/quiz')) {\n      setMode('quiz_loading')\n      // streamInlineQuizProgress() 호출 (Phase 5에서 통합)\n      setMode('quiz_answering')\n    } else if (cmd.startsWith('/grade')) {\n      setMode('grading')\n      // streamInlineGradeProgress() 호출\n      setMode('reviewing')\n    } else {\n      setMode('chatting')\n      setMessages([...messages, { role: 'user', content: cmd }])\n    }\n  }\n\n  return (\n    <Box flexDirection=\"column\" height=\"100%\">\n      <AppStatusBar repoName=\"example-repo\" commitRange=\"abc123..def456\" mode={mode} />\n      <HistoryView messages={messages} />\n      <InlineCodeView\n        files={files}\n        selectedFile={selectedFile}\n        code={code}\n        language=\"typescript\"\n        questions={questions}\n      />\n      <CommandBar onSubmit={handleCommand} />\n    </Box>\n  )\n}\n\nrender(<App />)\n```\n\n참조: py/src/git_study/tui_v2/app.py",
+        "testStrategy": "1. npm run dev로 전체 TUI 실행\n2. /quiz 입력 시 모드 전환 확인\n3. 각 컴포넌트 렌더링 및 상호작용 검증",
+        "priority": "high",
+        "dependencies": [
+          17
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 19,
+        "title": "E2E 통합 테스트 - 퀴즈 생성 및 채점 플로우",
+        "description": "전체 워크플로우 검증 (/quiz → 답변 → /grade)",
+        "details": "테스트 시나리오:\n1. 테스트 Git 저장소 준비 (3-5개 커밋)\n2. npm run dev 실행\n3. `/quiz HEAD~2` 입력\n4. 퀴즈 로딩 → 퀴즈 블록 표시 확인\n5. 각 문제에 답변 입력\n6. `/grade` 입력\n7. 채점 결과 및 피드백 표시 확인\n\nPython 버전과 비교:\n1. 동일 커밋 범위로 퀴즈 생성\n2. 질문 개수 및 타입 비교\n3. 채점 결과 점수 차이 < 10점 확인\n\nts/tests/e2e.test.ts 작성 (수동 검증 후 자동화)",
+        "testStrategy": "1. 전체 플로우 3회 반복 실행\n2. 각 단계별 로그 및 상태 확인\n3. Python TUI와 나란히 실행하여 출력 비교\n4. 체크포인트 DB 내용 검증 (SQLite 브라우저)",
+        "priority": "high",
+        "dependencies": [
+          18
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 20,
+        "title": "Python 코드베이스 제거 및 최종 정리",
+        "description": "py/ 디렉터리 제거 후 ts/를 루트로 이동 (옵션 B)",
+        "details": "Phase 5 완료 후 선택:\n\n**옵션 A: py/ 유지**\n- py/를 레거시 참고용으로 보존\n- README에 Python 버전 실행 방법 명시\n\n**옵션 B: py/ 제거 (권장)**\n1. `rm -rf py/`\n2. `mv ts/* .` (ts/ 내용을 루트로 이동)\n3. `rm -rf ts/`\n4. package.json의 bin 수정: `\"git-study\": \"./dist/main.js\"`\n5. README.md 업데이트 (TypeScript 실행 명령)\n6. .gitignore 정리 (Python 관련 항목 제거)\n\n최종 구조:\n```\ngit-study/\n├── package.json\n├── tsconfig.json\n├── README.md\n└── src/\n    ├── main.tsx\n    ├── types.ts\n    ├── graphs/\n    ├── services/\n    ├── domain/\n    ├── llm/\n    └── tui/\n```",
+        "testStrategy": "1. 옵션 B 적용 후 npm install\n2. npm run build 성공 확인\n3. npm start로 앱 실행\n4. 모든 기능 (퀴즈, 채점, 채팅) 정상 동작 검증\n5. 최종 커밋 및 main 브랜치 푸시",
+        "priority": "medium",
+        "dependencies": [
+          19
+        ],
+        "status": "pending",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "created": "2026-04-16T08:16:51.684Z",
+      "updated": "2026-04-16T08:16:51.684Z",
+      "description": "Tasks for master context"
+    }
+  }
+}
